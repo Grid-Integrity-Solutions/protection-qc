@@ -1,0 +1,1399 @@
+echo off
+log_echo off
+
+
+define_macro (ppdcr_print_terminal_data,
+  % fbus-tbus-cckt is the terminal information.
+  % Use it to retrieve LZOP data
+
+  save branch_tag fbus tbus cckt mybrtag
+  save branch_type fbus tbus cckt mybrtype
+
+  save base_kv fbus fbkv
+  save bus_name fbus fbusname
+  save bus_name tbus tbusname
+
+  refresh_protection_data
+
+  save bus_substation_id fbus fsubid
+  % Get the substation tag of this bus
+  save strcat("'select substation_tag from substation_data where substation_id = ",
+    '"',fsubid,'"',"'") g_sql_string
+  %dis g_sql_string
+  db_get_int g_sql_string subtag
+
+%  save strcat('Date_Time,Substation_Tag,SubstationID,Asset_kV,Asset_Type,',
+%    'Asset_FromBus,Asset_FromBusName,Asset_ToBus,Asset_ToBusName,Asset_Circuit,',
+%    'Is_LZOP_Present,LZOP_Tag,LZOP_Name,LZOP_Type,Is_LZOP_Logic_Present,LZOP_Logic_Code,',
+%    'Are_Relays_Present,Are_Elements_with_CLC_Present') LineRowString
+
+  % Form ppdcr_sub_output string
+  save strcat(study_datetime_str,',',ntoa(subtag),',',fsubid,',',ntoa(fbkv),',',mybrtype,',',
+   ntoa(fbus),',',fbusname,',',ntoa(tbus),',',tbusname,',',ntoa(cckt)) ppdcr_sub_output_str
+
+  define_matrix LZTMatrix(1)
+  save 0 numlztags
+
+  if (mybrtype = 'TCKT' OR mybrtype = 'XFMR') then
+    % LZOP ID is EQUIPMENT_NAME
+    save equipment_name fbus tbus cckt myeqname
+    save strcat("'select lzop_tag from local_zone_of_prot_data where substation_tag = ",ntoa(subtag),
+      " and lzop_id = ",'"',myeqname,'" AND lzop_type = "XFMR"',"'") g_sql_string
+    %dis g_sql_string
+    db_get_int g_sql_string baselztag
+
+%    if (lztag <= 0) then % Also check if TCKT belongs to a MISC LZOP
+      ppdcr_check_misc_lzop (fbus, tbus, cckt)
+%    else
+    if (baselztag > 0) then
+      increment(numlztags)
+      save baselztag LZTMatrix(1,numlztags)
+    endif
+
+  else
+    % Retrieve LZOP data using branch_tag for lines
+    save strcat("'select lzop_tag from local_zone_of_prot_data where substation_tag = ",ntoa(subtag),
+      " and lzop_id = ",'"',ntoa(mybrtag),'" AND lzop_type = "LINE"',"'") g_sql_string
+    %dis g_sql_string
+    db_get_int g_sql_string baselztag
+
+%    if (lztag <= 0) then % Check if line belongs to a MISC LZOP
+      ppdcr_check_misc_lzop (fbus, tbus, cckt)
+%    else
+    if (baselztag > 0) then
+      increment(numlztags)
+      save baselztag LZTMatrix(1,numlztags)
+    endif
+%auto_redraw saved_ar interrupt
+  endif
+
+  write_to_screen ' '
+  save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b Substation: ',fsubid,
+    " (Tag: ",ntoa(subtag),")\par}}") str1
+  write_to_screen str1
+
+%  write_to_screen ' '
+  if (mybrtype = 'TCKT' OR mybrtype = 'XFMR') then
+    save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b XFMR: ',line_rep_string,"\par}}") str1
+  else
+    save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b LINE: ',line_rep_string,"\par}}") str1
+  endif
+  write_to_screen str1
+
+%  save strcat('Date_Time,Substation_Tag,SubstationID,Asset_kV,Asset_Type,',
+%    'Asset_FromBus,Asset_FromBusName,Asset_ToBus,Asset_ToBusName,Asset_Circuit,',
+%    'Is_LZOP_Present,LZOP_Tag,LZOP_Name,LZOP_Type,Is_LZOP_Logic_Present,LZOP_Logic_Code,',
+%    'Are_Relays_Present,Are_Elements_with_CLC_Present') LineRowString
+
+  if (numlztags <= 0) then % No LZOPs found for this branch
+    save strcat('No LZOP found for this line/transformer at substation ',fsubid) str1 
+    write_to_screen str1
+    save strcat(ppdcr_sub_output_str,',','false') ppdcr_sub_output_str % FALSE for Is_LZOP_Present
+    save strcat('report_append "',ppdcr_sub_outputs_file_name,'"') str1
+    str1 % Open the report file
+    report_header OFF
+    screen_reports OFF
+    write_to_file_ns ppdcr_sub_output_str
+    file_reports off
+    screen_reports on
+  endif
+
+  % Loop through lzop tags stored in LZTMatrix
+  save 1 lzindx
+  dowhile (lzindx <= numlztags,
+    save LZTMatrix(1,lzindx) lztag
+    save lzop_name lztag lzname
+    save lzop_type lztag lztype
+
+%    write_to_screen ' '
+    save strcat('{\rtf\ansi{\colortbl;\red255\green0\blue0;}{\cf1\b LZOP: ',lzname(1:40),
+      " TYPE: ",lztype,"\par}}") str1
+    write_to_screen str1
+
+    if (lztype = 'XFMR') then
+      % get lzop_id = equipment_name and substation_tag.
+      save lzop_id lztag xfmreqname
+      save lzop_substation_tag lztag xfmrsubtag
+      save strcat("'select tag from N_CIRCUIT_TRANSFORMER_DATA where substation_tag = ",ntoa(xfmrsubtag),
+        " and equipment_name = ",'"',xfmreqname,'"',"'") g_sql_string
+      %dis g_sql_string
+      db_get_int g_sql_string xfmrtag
+
+      save strcat("select FROM_BUS_NUMBER, TO_BUS_NUMBER, circuit_number from nckt_transformer_details where branch_tag = ",
+        ntoa(xfmrtag)) sql_query
+      save 'rlprot_branches' as sql_matrix_name
+      test_help_form 'DBE SQL TO MATRIX'
+      % Matrix LZTMatrix now contains all LZOP tags whose PROTECT_DATA contains the study branch f-t-c.
+      save sizeof(rlprot_branches) NumCells
+      save NumCells/sql_matrix_rows as numrlprot_branches
+
+    elseif (lztype = 'MISC') then
+      save strcat("select FROM_BUS_NUMBER, TO_BUS_NUMBER, CIRCUIT_NUMBER from MISC_LZOP_PROTECT_DATA where lzop_tag = ",
+        ntoa(lztag)) sql_query
+      save 'rlprot_branches' as sql_matrix_name
+      test_help_form 'DBE SQL TO MATRIX'
+      % Matrix LZTMatrix now contains all LZOP tags whose PROTECT_DATA contains the study branch f-t-c.
+      save sizeof(rlprot_branches) NumCells
+      save NumCells/sql_matrix_rows as numrlprot_branches
+    endif
+
+    % Display existing logic code
+    save strcat("'select LZOP_LOGIC_CODE from LOCAL_ZONE_OF_PROT_DATA where ",
+      "LZOP_TAG = ",ntoa(lztag),"'") g_sql_string
+    db_get_string g_sql_string lzlogic
+    save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b LZOP Logic: ',lzlogic,'\par}}') str1
+    write_to_screen str1
+
+    % Add to ppdcr_sub_output_str
+    if (lzlogic = '' OR lzlogic = ' ') then
+      save 'false' lzlogic_present
+    else
+      save 'true' lzlogic_present
+    endif
+    save strcat(ppdcr_sub_output_str,',','true',',',ntoa(lztag),',',lztype,',',lzname,',',
+      lzlogic_present,',',lzlogic) ppdcr_sub_output_str
+
+    % CLCs within an LZOP must be unique. Therefore, initialize clc array for this LZOP
+    save 0 num_uniq_clcs_in_lzop % Number of unique CLCs in LZOP
+    define_matrix uniq_clc_matrix (2) % 1 - clc; 2 - # of times the CLC appears in the LZOP
+
+    save 0 numeles % Initialize element count in this LZOP
+    define_matrix lzop_clc_mat(2) % list of all CLCs in LZOP, whether unique or not, based on numeles
+      % 1 - stores CLC; 2 - index into uniq_clc_matrix to fetch the # of times the CLC appears in the LZOP
+    define_matrix lzop_ct_issues (2) % #1: ct_missing? #2: ct_br_mismatch?
+    define_matrix lzop_vt_issues (3) % #1: vt_missing? #2: vt_br_mismatch?, #3: VT_sub_mismatch
+    define_array ele_file_report
+    define_array ele_screen_report
+    ppdcr_get_relays_from_lzop
+
+    increment(lzindx)  % To next LZOP
+  )
+)
+
+
+define_macro (ppdcr_get_relays_from_lzop,
+  % Given LZOP tag, fetch relay tags - RELAY_DETAILS will always contain ACTIVE setting group
+  save strcat("select relay_tag from relay_details where lzop_tag = ",ntoa(lztag),
+    " order by lzop_rank") sql_query
+  save 'RTagMatrix' sql_matrix_name
+  test_help_form 'DBE SQL TO MATRIX'
+  save sizeof(RTagMatrix) NumCells
+  save sql_matrix_rows NumColsReturned
+  save NumCells/sql_matrix_rows NumRelays
+
+  % Given LZOP tag, fetch recloser tags - RECLOSER_DETAILS will always contain ACTIVE setting group
+  save strcat("select recloser_tag from recloser_details where lzop_tag = ",ntoa(lztag),
+    " order by lzop_rank") sql_query
+  save 'ReclTagMatrix' sql_matrix_name
+  test_help_form 'DBE SQL TO MATRIX'
+  save sizeof(ReclTagMatrix) NumCells
+  save sql_matrix_rows NumColsReturned
+  save NumCells/sql_matrix_rows NumReclosers
+
+  % Given LZOP tag, fetch fuse tags - FUSE_DETAILS will always contain ACTIVE setting group
+  save strcat("select fuse_tag from fuse_details where lzop_tag = ",ntoa(lztag),
+    " order by lzop_rank") sql_query
+  save 'FuseTagMatrix' sql_matrix_name
+  test_help_form 'DBE SQL TO MATRIX'
+  save sizeof(FuseTagMatrix) NumCells
+  save sql_matrix_rows NumColsReturned
+  save NumCells/sql_matrix_rows NumFuses
+
+  if (NumRelays <= 0) then
+    write_to_screen 'No relays in this LZOP'
+    if (NumReclosers > 0) then
+      save strcat('Found ',ntoa(NumReclosers),' reclosers in this LZOP') str1
+      write_to_screen str1
+    endif
+    if (NumFuses > 0) then
+      save strcat('Found ',ntoa(NumFuses),' fuses in this LZOP') str1
+      write_to_screen str1
+    endif
+
+    save strcat(ppdcr_sub_output_str,',','false') ppdcr_sub_output_str % false--> no relays in lzop
+    save strcat('report_append "',ppdcr_sub_outputs_file_name,'"') str1
+    str1 % Open the report file
+    report_header OFF
+    screen_reports OFF
+    write_to_file_ns ppdcr_sub_output_str
+    file_reports off
+    screen_reports on
+
+  else
+    % Fetch basic relay info - Name, Scheme, Connected CT, VT
+
+%    write_to_screen ' '
+    save strcat('----------------------------------------------------------------------------------------------') str1
+    save strcat(str1,'-----------------------') str1
+    save strcat(str1,'--------------------------------------------------------------------------------------------') str1
+    save strcat(str1,'----------------------------------------------------------------------------------------------------') str1
+    write_to_screen str1
+
+    save strcat('                                                                                             ') str1
+    save strcat(str1,'                |REACH  |MTA   |      |TIMEDIAL|') str1
+    write_to_screen str1
+
+    save strcat('  TAG            RELAY NAME            PROT. SCHEME     RELAY STYLE    CODE  DESIGNATION ZONE|') str1
+    save strcat(str1,'CTRATIO|PTRATIO|') str1
+    save strcat(str1,'PKP (A)|      |REACH%|OR DELAY|INVERSE TIME CHARAC.|TRIPCB|ELEMENT FUNCTION TYPE|CONTACT LOGIC CODE') str1
+    save strcat(str1,'|DUPLICATELOGICCODE|CT MISSING?|CT BRANCH MISMATCH?|VT MISSING?|VT BRANCH MISMATCH?|VT SUB MISMATCH?') str1
+    write_to_screen str1
+
+    save strcat('------|------------------------------|---------------|---------------|------|-----------|----|') str1
+    save strcat(str1,'-------|-------|') str1
+    save strcat(str1,'--------------|------|--------|--------------------|------|---------------------|------------------|') str1
+    save strcat(str1,'----------------------------------------------------------------------------------------------------') str1
+    write_to_screen str1
+
+    save strcat(ppdcr_sub_output_str,',','true') ppdcr_sub_output_str % false--> we do have relays in lzop
+
+    save 0 numeles_in_lzop_with_clc  % Count CLC containing elements separately from trip_cb = Y elements
+    save 0 numeles_in_lzop_with_tripcb
+    save '' dup_clc_str_file
+    save 1 rlindx
+    dowhile (rlindx <= NumRelays,
+
+      save RTagMatrix(1,rlindx) rtag
+      % Get elements with non-blank CLC. For data quality, don't get TRIP_CB = Y
+      save strcat("define_device_set (myeleset, RELAY_TAG = ",ntoa(rtag),
+        " AND (CONTACT_LOGIC_CODE <> '' OR ELEMENT_TRIP_CB = 'Y'))") dds_string
+      dds_string
+
+      save sizeof(myeleset) num_eles_tripcb
+%      save numeles_in_lzop_with_clc + num_eles_tripcb numeles_in_lzop_with_clc
+      if (num_eles_tripcb <= 0) then
+        increment(rlindx) % Go to next relay in this LZOP since no TRIP_CB elements here
+        cycle
+      endif
+
+      % We are here --> Some elements in this relay have their TRIP_CB flags turned ON
+      % Using rtag, fetch device_tag from relay_data table.
+      save strcat("'select device_tag from relay_data where relay_tag = ",ntoa(rtag),"'") g_sql_string
+      db_get_int g_sql_string devtag
+
+      % Using rtag, fetch protection_Scheme information from relay_data
+      save strcat("'select PROTECTION_SCHEME from relay_data where relay_tag = ",ntoa(rtag),"'") g_sql_string
+      db_get_string g_sql_string rlscheme
+
+      save strcat("'select STYLE from relay_data where relay_tag = ",ntoa(rtag),"'") g_sql_string
+      db_get_string g_sql_string rlstyle
+
+      % Using device_tag, fetch device_name
+      save strcat("'select device_name from protective_device_data where device_tag = ",ntoa(devtag),"'") g_sql_string
+      db_get_string g_sql_string rlname
+      
+      save strcat(ntoa(rtag,'i6'),"|",rlname(1:30),"|",rlscheme(1:15),"|",rlstyle(1:15)) relay_rep_string
+
+      save strcat(ntoa(rtag),",",rlname,",",rlscheme,",",rlstyle) relay_rep_string_file
+
+      % Process element-level data
+      ppdcr_get_element_info ()
+
+      increment(rlindx)
+    )
+
+    %Can print to screen now, and store in CSV file
+    save '' dup_clc_found_for_sub_output
+    save '' ct_issues_found_for_sub_output
+    save '' vt_issues_found_for_sub_output
+    save 1 rlindx
+    dowhile (rlindx <= numeles,
+
+      save lzop_clc_mat (2,rlindx) uniqclcindx
+      save uniq_clc_matrix(2,uniqclcindx) numtimesclcused
+      if (numtimesclcused > 1) then
+        save 'Yes' dup_clc_str
+        save 'true' dup_clc_str_file
+        save 'true' dup_clc_found_for_sub_output
+      elseif (numtimesclcused = 1) then
+        save 'No' dup_clc_str
+        save 'false' dup_clc_str_file
+        if (dup_clc_found_for_sub_output <> 'true') then
+          save 'false' dup_clc_found_for_sub_output
+        endif
+      else
+        save '' dup_clc_str
+        save '' dup_clc_str_file
+      endif
+
+      save lzop_ct_issues(1,rlindx) ct_missing
+      save lzop_ct_issues(2,rlindx) ct_br_mismatch
+
+      save lzop_vt_issues(1,rlindx) vt_missing
+      save lzop_vt_issues(2,rlindx) vt_br_mismatch
+      save lzop_vt_issues(3,rlindx) vt_sub_mismatch
+
+      save strcat(ele_screen_report(rlindx),'|',dup_clc_str(1:18),
+        '|',ct_missing(1:11),'|',ct_br_mismatch(1:19),
+        '|',vt_missing(1:11),'|',vt_br_mismatch(1:19),'|',vt_sub_mismatch(1:16)) final_rep_string
+      write_to_screen final_rep_string
+
+      if (ct_missing = 'Yes') then
+        save 'true' ct_missing_file
+      elseif (ct_missing = 'No') then
+        save 'false' ct_missing_file
+      else
+        save '' ct_missing_file
+      endif
+      if (ct_br_mismatch = 'Yes') then
+        save 'true' ct_br_mismatch_file
+      elseif (ct_br_mismatch = 'No') then
+        save 'false' ct_br_mismatch_file
+      else
+        save '' ct_br_mismatch_file
+      endif
+      if (ct_missing = 'Yes' OR ct_br_mismatch = 'Yes') then
+        save 'true' ct_issues_found_for_sub_output
+      elseif (ct_missing = 'No' AND ct_br_mismatch = 'No') then
+        % Check explicitly because it is possible the element may not need any ct connection
+        if (ct_issues_found_for_sub_output <> 'true') then
+          save 'false' ct_issues_found_for_sub_output
+        endif          
+      endif
+
+      if (vt_missing = 'Yes') then
+        save 'true' vt_missing_file
+      elseif (vt_missing = 'No') then
+        save 'false' vt_missing_file
+      else
+        save '' vt_missing_file
+      endif
+      if (vt_br_mismatch = 'Yes') then
+        save 'true' vt_br_mismatch_file
+      elseif (vt_br_mismatch = 'No') then
+        save 'false' vt_br_mismatch_file
+      else
+        save '' vt_br_mismatch_file
+      endif
+      if (vt_sub_mismatch = 'Yes') then
+        save 'true' vt_sub_mismatch_file
+      elseif (vt_sub_mismatch = 'No') then
+        save 'false' vt_sub_mismatch_file
+      else
+        save '' vt_sub_mismatch_file
+      endif
+      if (vt_missing = 'Yes' OR vt_br_mismatch = 'Yes' OR vt_sub_mismatch = 'Yes') then
+        save 'true' vt_issues_found_for_sub_output
+      elseif (vt_missing = 'No' AND vt_br_mismatch = 'No' AND vt_sub_mismatch = 'No') then
+        % Check explicitly because it is possible the element may not need any vt connection
+        if (vt_issues_found_for_sub_output <> 'true') then
+          save 'false' vt_issues_found_for_sub_output
+        endif          
+      endif
+
+      save strcat(ele_file_report(rlindx),',',dup_clc_str_file,
+        ',',ct_missing_file,',',ct_br_mismatch_file,
+        ',',vt_missing_file,',',vt_br_mismatch_file,',',vt_sub_mismatch_file,
+        ',',ntoa(fbkv)) final_rep_string
+      save strcat('report_append "',ppdcr_ele_outputs_file_name,'"') str1
+      str1 % Open the report file
+      report_header OFF
+      screen_reports OFF
+      write_to_file_ns final_rep_string
+      file_reports OFF
+      screen_reports ON
+
+      increment(rlindx)
+    )
+
+    % Done with all relays in this lzop. Complete the last part of the ppdcr_sub_output_str
+    if (NumRelays > 0) then
+      if (numeles_in_lzop_with_clc > 0) then
+        save 'true' eles_with_clc_present
+      else
+        save 'false' eles_with_clc_present
+      endif
+
+      if (numeles_in_lzop_with_tripcb > numeles_in_lzop_with_clc) then
+        save 'true' eles_with_tripcb_present
+      else
+        if (numeles_in_lzop_with_clc > 0) then  % We have at least one element with clc and tripcb = y NOT GREATER than eles with clc
+          save 'false' eles_with_tripcb_present  % Desired condition
+        else % We don't have any elements with clc AND tripcb = y NOT greater than eles with clc (both 0)
+          save '' eles_with_tripcb_present
+        endif
+      endif
+
+    else
+      save '' eles_with_clc_present
+      save '' eles_with_tripcb_present
+    endif
+    save strcat(ppdcr_sub_output_str,',',eles_with_clc_present,
+      ',',dup_clc_found_for_sub_output,
+      ',',eles_with_tripcb_present,
+      ',',ct_issues_found_for_sub_output,
+      ',',vt_issues_found_for_sub_output) ppdcr_sub_output_str % Are elements with clc present?
+    save strcat('report_append "',ppdcr_sub_outputs_file_name,'"') str1
+    str1 % Open the report file
+    report_header OFF
+    screen_reports OFF
+    write_to_file_ns ppdcr_sub_output_str
+    file_reports off
+    screen_reports on
+
+  endif
+)
+
+define_macro (ppdcr_get_element_info,
+
+  % MYELESET already contains a list of elements in the relay RTAG, whose TRIP_CB = "Y" or clc is not blank
+  save "Y" rltripcb
+  save "" dum_na
+  save 0 numiocs
+  save 0 numtocs
+  save 0 numdists
+  doset(myeleset,
+    save #r rltag
+    save #t rlcod
+    save #d rldes
+    save '#z' rlzun
+    save '#u' rluni
+
+    save MODEL rltag rlmodel  % Relay Model
+    save STYLE rltag rlstyle  % Relay Style
+    save " " elfunctype
+    % Check IOC, TOC, DIS, TIMER and AUX elements
+    if (rlcod = 'IOC') then
+      save strcat ('store_element ',ntoa(rltag),' ',rlcod,' "',rldes,'"') str1
+      screen_reports off
+      str1 % Element stored.
+      screen_reports on
+      if (relay_error > 0) then
+        cycle % To next element
+      endif
+      save "    " rlzun
+
+      increment(numiocs)
+      % Get settings for display
+      save '' vt_missing
+      save '' vt_br_mismatch
+      save '' vt_sub_mismatch
+
+      save 'No' ct_missing
+      save operating_ct_type cse opcttype
+      if (opcttype = "" OR opcttype = " ") then
+        save 'Yes' ct_missing
+      endif
+
+      % Validate CT branch
+      save relay_lzop_tag rltag rlztag
+      save relay_protect_local_bus  cse rlprot_fbus
+      save relay_protect_remote_bus cse rlprot_tbus
+      save relay_protect_circuit    cse rlprot_cckt
+      save 'No' ct_br_mismatch
+      if (ct_missing = 'Yes') then
+        save '' ct_br_mismatch  % Blank, not yes
+      else
+        save strcat("'select OPERATING_CT_NAME from INST_OC_ELEMENT_DATA where RELAY_TAG = ",
+          ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query opctname
+        % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+        save local_bus cse ct_local_bus
+        save remote_bus cse ct_remote_bus
+        save circuit cse ct_circuit
+        save FALSE ctmatchfound
+        ppdcr_validate_ctbranch()
+        if (not ctmatchfound) then
+           save 'Yes' ct_br_mismatch
+        endif
+      endif
+
+      save CTR cse ele_ctr
+      save pickup_tap_setting*ele_ctr cse ele_pkp
+      if (ele_pkp > 99999) then
+        save '99999' ele_pkp_str1
+      else
+        save ntoa(ele_pkp) ele_pkp_str1
+      endif
+      save '' ele_pkp_str2
+      save timer_setting cse ele_dly
+      save '' ele_charac
+      save contact_logic_code cse elclcode
+
+      % TripCBFlag
+      save strcat("'select TRIP_CB from INST_OC_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+      db_get_string sql_query TripCBFlag
+
+      if (elclcode <> '') then
+        increment(numeles_in_lzop_with_clc)
+      endif
+      if (TripCBFlag = 'Y') then
+        increment(numeles_in_lzop_with_tripcb)
+      endif
+
+      save strcat(ntoa(ele_ctr,'f7.2'),'|',dum_na(1:7),'|',ele_pkp_str1(1:7),'|',ele_pkp_str2(1:6),'|',dum_na(1:6),'|',
+        ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+      save strcat(ntoa(ele_ctr),',',dum_na,',',ele_pkp_str1,',',ele_pkp_str2,',',dum_na,',',
+        ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+
+      % Get its functional designation. If blank at system level, go to model level
+      % Since CUPL variable support is not available yet, go directly to the DB table
+      save strcat("'select FUNCTION_TYPE from INST_OC_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+      db_get_string sql_query elfunctype
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Fetch default function designation
+        save strcat("'select FUNCTION_TYPE_DEFAULT from INST_OC_ELEMENT_TIME_CHARAC where MODEL = ",'"',
+        rlmodel,'"',' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query elfunctype
+      endif
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Try to use operating_ct_qty to figure out functional designation
+        save operating_ct_qty cse opctqty
+        if (opctqty = "Z" OR opctqty = "NEUT" OR opctqty = "3*IZR") then
+          save "IOC_G" elfunctype
+        elseif (opctqty = "N " OR opctqty = "3*INR") then
+          save "IOC_Q" elfunctype
+        elseif (opctqty = "ABC" OR opctqty = "A" OR opctqty = "B" OR opctqty = "C" OR
+          opctqty = "AB" OR opctqty = "BC" OR opctqty = "CA") then
+          save "IOC_P" elfunctype
+        endif
+      endif
+
+    elseif (rlcod = 'TOC') then
+      save strcat ('store_element ',ntoa(rltag),' ',rlcod,' "',rldes,'"') str1
+      screen_reports off
+      str1 % Element stored.
+      screen_reports on
+      if (relay_error > 0) then
+        cycle % To next element
+      endif
+      save "" rlzun
+
+      increment(numtocs)
+      % Get settings for display
+      save '' vt_missing
+      save '' vt_br_mismatch
+      save '' vt_sub_mismatch
+
+      save 'No' ct_missing
+      save operating_ct_type cse opcttype
+      if (opcttype = "" OR opcttype = " ") then
+        save 'Yes' ct_missing
+      endif
+
+      % Validate CT branch
+      save relay_lzop_tag rltag rlztag
+      save relay_protect_local_bus  cse rlprot_fbus
+      save relay_protect_remote_bus cse rlprot_tbus
+      save relay_protect_circuit    cse rlprot_cckt
+      save 'No' ct_br_mismatch
+      if (ct_missing = 'Yes') then
+        save '' ct_br_mismatch  % Blank not yes
+      else
+        save strcat("'select OPERATING_CT_NAME from TIME_OC_ELEMENT_DATA where RELAY_TAG = ",
+          ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query opctname
+        % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+        save local_bus cse ct_local_bus
+        save remote_bus cse ct_remote_bus
+        save circuit cse ct_circuit
+        save FALSE ctmatchfound
+        ppdcr_validate_ctbranch()
+        if (not ctmatchfound) then
+           save 'Yes' ct_br_mismatch
+        endif
+      endif
+
+      save CTR cse ele_ctr
+      save pickup_tap_setting*ele_ctr cse ele_pkp
+      if (ele_pkp > 99999) then
+        save '99999' ele_pkp_str1
+      else
+        save ntoa(ele_pkp) ele_pkp_str1
+      endif
+      save '' ele_pkp_str2
+      save time_dial_setting cse ele_dly
+      save time_charac cse ele_charac
+      save contact_logic_code cse elclcode
+
+      % TripCBFlag
+      save strcat("'select TRIP_CB from TIME_OC_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+      db_get_string sql_query TripCBFlag
+
+      if (elclcode <> '') then
+        increment(numeles_in_lzop_with_clc)
+      endif
+      if (TripCBFlag = 'Y') then
+        increment(numeles_in_lzop_with_tripcb)
+      endif
+
+      save strcat(ntoa(ele_ctr,'f7.2'),'|',dum_na(1:7),'|',ele_pkp_str1(1:7),'|',ele_pkp_str2(1:6),'|',dum_na(1:6),'|',
+        ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+      save strcat(ntoa(ele_ctr),',',dum_na,',',ele_pkp_str1,',',ele_pkp_str2,',',dum_na,',',
+        ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+
+      % Get its functional designation. If blank at system level, go to model level
+      % Since CUPL variable support is not available yet, go directly to the DB table
+      save strcat("'select FUNCTION_TYPE from TIME_OC_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+      db_get_string sql_query elfunctype
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Fetch default function designation
+        save strcat("'select FUNCTION_TYPE_DEFAULT from TIME_OC_ELEMENT_TIME_CHARAC where MODEL = ",'"',
+        rlmodel,'"',' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query elfunctype
+      endif
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Try to use operating_ct_qty to figure out functional designation
+        save operating_ct_qty cse opctqty
+        if (opctqty = "Z" OR opctqty = "NEUT" OR opctqty = "3*IZR") then
+          save "TOC_G" elfunctype
+        elseif (opctqty = "N " OR opctqty = "3*INR") then
+          save "TOC_Q" elfunctype
+        elseif (opctqty = "ABC" OR opctqty = "A" OR opctqty = "B" OR opctqty = "C" OR opctqty = "P") then
+          save "TOC_P" elfunctype
+        endif
+      endif
+
+    elseif (rlcod = 'DIST') then
+      save strcat ('store_element ',ntoa(rltag),' ',rlcod,' "',rldes,'" "',rlzun,'"') str1
+      screen_reports off
+      str1 % Element stored.
+      screen_reports on
+      if (relay_error > 0) then
+        cycle % To next element
+      endif
+
+      increment(numdists)
+      % Get settings for display
+      save 'No' ct_missing
+      save operating_ct_type cse opcttype
+      if (opcttype = "" OR opcttype = " ") then
+        save 'Yes' ct_missing
+      endif
+
+      % Validate CT branch
+      save relay_lzop_tag rltag rlztag
+      save relay_protect_local_bus  cse rlprot_fbus
+      save relay_protect_remote_bus cse rlprot_tbus
+      save relay_protect_circuit    cse rlprot_cckt
+      save 'No' ct_br_mismatch
+      if (ct_missing = 'Yes') then
+        save '' ct_br_mismatch  % Blank not yes
+      else
+        save strcat("'select OPERATING_CT_NAME from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+          ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'" AND ',
+          'DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+        db_get_string sql_query opctname
+        % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+        save local_bus cse ct_local_bus
+        save remote_bus cse ct_remote_bus
+        save circuit cse ct_circuit
+        save FALSE ctmatchfound
+        ppdcr_validate_ctbranch()
+        if (not ctmatchfound) then
+           save 'Yes' ct_br_mismatch
+        endif
+      endif
+
+      save 'No' vt_missing
+%      save strcat("'select OPERATING_VT_TYPE from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+%        ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'" AND ',
+%        'DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+%      db_get_string sql_query opvttype
+%      save strcat("'select OPERATING_VT_NAME from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+%        ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'" AND ',
+%        'DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+%      db_get_string sql_query opvtname
+      save vt_bus cse elevtbus
+%      if (opvtname = "" OR opvtname = " ") then
+      if (elevtbus <= 0) then
+        save 'Yes' vt_missing
+      endif
+      save 'No' vt_br_mismatch
+      save 'No' vt_sub_mismatch
+      if (vt_missing = 'Yes') then
+        save '' vt_br_mismatch
+        save '' vt_sub_mismatch
+      else
+        save FALSE vtsubmatchfound
+        save FALSE vtmatchfound
+        ppdcr_validate_vt ()
+        if (not vtmatchfound) then
+          save 'Yes' vt_br_mismatch
+        endif
+        if (not vtsubmatchfound) then
+          save 'Yes' vt_sub_mismatch
+        endif
+      endif
+
+      save CTR cse ele_ctr
+      save VTR cse ele_vtr
+      save imp_set_ohms_relay*ele_vtr/ele_ctr cse ele_pkp
+      save mta cse ele_mta
+      if (ele_pkp > 9999) then
+        save '9999' ele_pkp_str1
+        save '' ele_pkp_str2
+        save '' ele_pkp_str3
+      else
+        save ntoa(ele_pkp) ele_pkp_str1
+        save ntoa(ele_mta) ele_pkp_str2
+        % Express reach at MTA as reach at line angle, then calculate percentage of line impedance
+        if (mybrtype = 'TCKT' OR mybrtype = 'XFMR') then
+          save '' ele_pkp_str3
+        else          
+          save ele_pkp*cos(arg(zpath_imp_prim)-ele_mta) ele_pkp_line
+          save ntoa(ele_pkp_line/abs(zpath_imp_prim)*100) ele_pkp_str3
+        endif
+      endif
+      save timer_setting cse ele_dly
+      save '' ele_charac
+      save contact_logic_code cse elclcode
+
+      % TripCBFlag
+      save strcat("'select TRIP_CB from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',' AND DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+      db_get_string sql_query TripCBFlag
+
+      if (elclcode <> '') then
+        increment(numeles_in_lzop_with_clc)
+      endif
+      if (TripCBFlag = 'Y') then
+        increment(numeles_in_lzop_with_tripcb)
+      endif
+
+      save strcat(ntoa(ele_ctr,'f7.2'),'|',ntoa(ele_vtr,'f7.2'),'|',ele_pkp_str1(1:7),'|',ele_pkp_str2(1:6),'|',ele_pkp_str3(1:6),
+        '|',ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+      save strcat(ntoa(ele_ctr),',',ntoa(ele_vtr),',',ele_pkp_str1,',',ele_pkp_str2,',',ele_pkp_str3,',',
+        ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+
+      % Get its functional designation. If blank at system level, go to model level
+      % Since CUPL variable support is not available yet, go directly to the DB table
+      save strcat("'select FUNCTION_TYPE from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',' AND DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+      db_get_string sql_query elfunctype
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Fetch default function designation
+        save strcat("'select FUNCTION_TYPE_DEFAULT from DISTANCE_ELEMENT_TIME_CHARAC where MODEL = ",'"',
+        rlmodel,'"',' AND ELEMENT_DESIGNATION = "',rldes,'"',' AND DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+        db_get_string sql_query elfunctype
+      endif
+
+    elseif (rlcod = 'TIMER') then
+      save strcat ('store_element ',ntoa(rltag),' ',rlcod,' "',rldes,'" "',rlzun,'"') str1
+      screen_reports off
+      str1 % Element stored.
+      screen_reports on
+      if (relay_error > 0) then
+        cycle % To next element
+      endif
+
+      % Get settings for display
+      save '' ct_missing
+      save '' ct_br_mismatch
+      %save ' ' dum_set
+      save timer_setting cse ele_dly
+      save '' ele_charac
+      save contact_logic_code cse elclcode
+
+      % TripCBFlag
+      save strcat("'select TRIP_CB from TIMER_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',' AND UNIT_NUMBER = "',rlzun,'"',"'") sql_query
+      db_get_string sql_query TripCBFlag
+
+      if (elclcode <> '') then
+        increment(numeles_in_lzop_with_clc)
+      endif
+      if (TripCBFlag = 'Y') then
+        increment(numeles_in_lzop_with_tripcb)
+      endif
+
+      %save strcat(dum_set(1:14),' ',ntoa(ele_dly,'f8.2'),' ',ele_charac(1:20)) relay_setting_string
+
+      % Get DIST supervisor data; will need it to show element settings
+      save strcat ('get_supervising_element ',ntoa(rltag),' ',rlcod,' "',rldes,'" "',rlzun,'" junkmat1') str1
+      str1
+      save junkmat1(2,1) junkcodd
+      if (junkcodd = DIST) then
+        % Supervisor is a DIST, OK.
+        save junkmat1(1,1) rtag_sup
+        save junkmat1(2,1) rcod_sup
+        save junkmat1(3,1) rdes_sup
+        save junkmat1(4,1) rzun_sup
+        save strcat ('store_element ',ntoa(rtag_sup),' ',rcod_sup,' "',rdes_sup,'" "',rzun_sup,'"') str1
+        screen_reports off
+        str1 % Element stored.
+        screen_reports on
+        if (relay_error > 0) then
+          save 0 rtag_sup
+        endif
+        save MODEL cse rmodel_sup
+      elseif (junkcodd = IOC) then
+        % IOC supervisor, OK as well
+        save junkmat1(1,1) rtag_sup
+        save junkmat1(2,1) rcod_sup
+        save junkmat1(3,1) rdes_sup
+        save strcat ('store_element ',ntoa(rtag_sup),' ',rcod_sup,' "',rdes_sup,'"') str1
+        screen_reports off
+        str1 % Element stored.
+        screen_reports on
+        if (relay_error > 0) then
+          save 0 rtag_sup
+        endif
+        save MODEL cse rmodel_sup
+      else
+        save 0 rtag_sup
+      endif
+%dis 'Got here 1'
+      if (rtag_sup > 0) then
+        save relay_lzop_tag rtag_sup rlztag
+        % Get settings for display - ele_dly and ele_charac already determined.
+        if (rcod_sup = DIST) then
+%dis 'Got here 2'
+
+          increment(numdists)
+          save 'No' ct_missing
+          save operating_ct_type cse opcttype
+%dis 'Got here 3'
+          if (opcttype = "" OR opcttype = " ") then
+            save 'Yes' ct_missing
+          endif
+
+          % Validate CT branch
+          save relay_protect_local_bus  cse rlprot_fbus
+          save relay_protect_remote_bus cse rlprot_tbus
+          save relay_protect_circuit    cse rlprot_cckt
+%dis 'Got here 4'
+          save 'No' ct_br_mismatch
+          if (ct_missing = 'Yes') then
+            save '' ct_br_mismatch  % Blank not yes
+          else
+            save strcat("'select OPERATING_CT_NAME from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+              ntoa(rtag_sup),' AND ELEMENT_DESIGNATION = "',rdes_sup,'" AND ',
+              'DS_ZONE_NUMBER = "',rzun_sup,'"',"'") sql_query
+            db_get_string sql_query opctname
+            % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+            save local_bus cse ct_local_bus
+            save remote_bus cse ct_remote_bus
+            save circuit cse ct_circuit
+%dis 'Got here 5'
+            save FALSE ctmatchfound
+            ppdcr_validate_ctbranch()
+            if (not ctmatchfound) then
+               save 'Yes' ct_br_mismatch
+            endif
+          endif
+
+          save 'No' vt_missing
+%          save strcat("'select OPERATING_VT_TYPE from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+%            ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'" AND ',
+%            'DS_ZONE_NUMBER = "',rlzun,'"',"'") sql_query
+%          db_get_string sql_query opvttype
+%          save strcat("'select OPERATING_VT_NAME from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+%            ntoa(rtag_sup),' AND ELEMENT_DESIGNATION = "',rdes_sup,'" AND ',
+%            'DS_ZONE_NUMBER = "',rzun_sup,'"',"'") sql_query
+%          db_get_string sql_query opvtname
+%          if (opvtname = "" OR opvtname = " ") then
+          save vt_bus cse elevtbus
+          if (elevtbus <= 0) then
+            save 'Yes' vt_missing
+          endif
+          save 'No' vt_br_mismatch
+          save 'No' vt_sub_mismatch
+          if (vt_missing = 'Yes') then
+            save '' vt_br_mismatch
+            save '' vt_sub_mismatch
+          else
+            save FALSE vtsubmatchfound
+            save false vtmatchfound
+            ppdcr_validate_vt ()
+            if (not vtmatchfound) then
+              save 'Yes' vt_br_mismatch
+            endif
+            if (not vtsubmatchfound) then
+              save 'Yes' vt_sub_mismatch
+            endif
+          endif
+
+          save CTR cse ele_ctr
+          save VTR cse ele_vtr
+          save imp_set_ohms_relay*ele_vtr/ele_ctr cse ele_pkp
+          save mta cse ele_mta
+          if (ele_pkp > 9999) then
+            save '9999' ele_pkp_str1
+            save '' ele_pkp_str2
+            save '' ele_pkp_str3
+          else
+            save ntoa(ele_pkp) ele_pkp_str1
+            save ntoa(ele_mta) ele_pkp_str2
+            % Express reach at MTA as reach at line angle, then calculate percentage of line impedance
+            if (mybrtype = 'TCKT' OR mybrtype = 'XFMR') then
+              save '' ele_pkp_str3
+            else          
+              save ele_pkp*cos(arg(zpath_imp_prim)-ele_mta) ele_pkp_line
+              save ntoa(ele_pkp_line/abs(zpath_imp_prim)*100) ele_pkp_str3
+            endif
+          endif
+          save strcat(ntoa(ele_ctr,'f7.2'),'|',ntoa(ele_vtr,'f7.2'),'|',ele_pkp_str1(1:7),'|',ele_pkp_str2(1:6),'|',ele_pkp_str3(1:6),'|',
+            ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+          save strcat(ntoa(ele_ctr),',',ntoa(ele_vtr),',',ele_pkp_str1,',',ele_pkp_str2,',',ele_pkp_str3,',',
+            ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+
+        else  % IOC supervisor
+
+          increment(numiocs)
+          save '' vt_missing
+          save '' vt_br_mismatch
+          save '' vt_sub_mismatch
+
+          save 'No' ct_missing
+          save operating_ct_type cse opcttype
+          if (opcttype = "" OR opcttype = " ") then
+            save 'Yes' ct_missing
+          endif
+
+          % Validate CT branch
+          save relay_protect_local_bus  cse rlprot_fbus
+          save relay_protect_remote_bus cse rlprot_tbus
+          save relay_protect_circuit    cse rlprot_cckt
+          save 'No' ct_br_mismatch
+          if (ct_missing = 'Yes') then
+            save '' ct_br_mismatch  % Blank not yes
+          else
+            save strcat("'select FUNCTION_TYPE_DEFAULT from INST_OC_ELEMENT_TIME_CHARAC where MODEL = ",'"',
+            rmodel_sup,'"',' AND ELEMENT_DESIGNATION = "',rdes_sup,'"',"'") sql_query
+            db_get_string sql_query opctname
+            % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+            save local_bus cse ct_local_bus
+            save remote_bus cse ct_remote_bus
+            save circuit cse ct_circuit
+            save FALSE ctmatchfound
+            ppdcr_validate_ctbranch()
+            if (not ctmatchfound) then
+              save 'Yes' ct_br_mismatch
+            endif
+          endif
+
+          save CTR cse ele_ctr
+          save pickup_tap_setting*ele_ctr cse ele_pkp
+          if (ele_pkp > 99999) then
+            save '99999' ele_pkp_str1
+          else
+            save ntoa(ele_pkp) ele_pkp_str1
+          endif
+          save '' ele_pkp_str2
+
+          save strcat(ntoa(ele_ctr,'f7.2'),'|',dum_na(1:7),'|',ele_pkp_str1(1:7),'|',ele_pkp_str2(1:6),'|',dum_na(1:6),'|',
+            ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+          save strcat(ntoa(ele_ctr),',',dum_na,',',ele_pkp_str1,',',ele_pkp_str2,',',dum_na,',',
+            ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+        endif
+      else
+        save '' dum_set
+        save '' ele_charac
+        save strcat(dum_na(1:7),'|',dum_na(1:7),'|',dum_set(1:7),'|',dum_set(1:6),'|',dum_na(1:6),'|',
+          ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+        save strcat(dum_na,',',dum_na,',',dum_set,',',dum_set,',',dum_na,',',
+          ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+      endif
+
+      % Get its functional designation. If blank at system level, go to model level
+      % Since CUPL variable support is not available yet, go directly to the DB table
+      save strcat("'select FUNCTION_TYPE from TIMER_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',' AND UNIT_NUMBER = "',rlzun,'"',"'") sql_query
+      db_get_string sql_query elfunctype
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Fetch default function designation
+        save strcat("'select FUNCTION_TYPE_DEFAULT from TIMER_ELEMENT_CHARAC where MODEL = ",'"',
+        rlmodel,'"',' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query elfunctype
+      endif
+
+      if (elfunctype = " " OR elfunctype = "-999") then
+        % Function type in the model has not been defined either.
+        % Does supervising element have a classification?
+        if (rtag_sup > 0) then % Supervisor is DIST OR IOC; check its function_type
+          % Supervising DIST or IOC element now stored
+          % Get its function type and assign CLC based on that
+          if (rcod_sup = DIST) then
+            save strcat("'select FUNCTION_TYPE from DISTANCE_ELEMENT_DATA where RELAY_TAG = ",
+              ntoa(rtag_sup),' AND ELEMENT_DESIGNATION = "',rdes_sup,'"',' AND DS_ZONE_NUMBER = "',rzun_sup,'"',"'") sql_query
+          else % IOC supervisor
+            save strcat("'select FUNCTION_TYPE from INST_OC_ELEMENT_DATA where RELAY_TAG = ",
+              ntoa(rtag_sup),' AND ELEMENT_DESIGNATION = "',rdes_sup,'"',"'") sql_query
+          endif
+          db_get_string sql_query sup_elfunctype
+
+          save MODEL rtag_sup rmodel_sup
+          if (sup_elfunctype = " " or sup_elfunctype = "-999") then
+            % Fetch default function designation
+            if (rcod_sup = DIST) then
+              save strcat("'select FUNCTION_TYPE_DEFAULT from DISTANCE_ELEMENT_TIME_CHARAC where MODEL = ",'"',
+                rmodel_sup,'"',' AND ELEMENT_DESIGNATION = "',rdes_sup,'"',' AND DS_ZONE_NUMBER = "',rzun_sup,'"',"'") sql_query
+            else % IOC supervisor
+              save strcat("'select FUNCTION_TYPE_DEFAULT from INST_OC_ELEMENT_TIME_CHARAC where MODEL = ",'"',
+                rmodel_sup,'"',' AND ELEMENT_DESIGNATION = "',rdes_sup,'"',"'") sql_query
+            endif
+            db_get_string sql_query sup_elfunctype
+          endif
+
+          % Since the element is a timer, we want to append a _T to the DIST function type
+          if (sup_elfunctype <> " " AND sup_elfunctype <> "-999") then
+            save strcat(sup_elfunctype,"_T") elfunctype
+          endif
+
+        endif       
+      endif
+
+      % If elfunctype is still blank, then, pass for now
+
+    elseif (rlcod = 'AUX') then
+      save strcat ('store_element ',ntoa(rltag),' ',rlcod,' "',rldes,'"') str1
+      screen_reports off
+      str1 % Element stored.
+      screen_reports on
+      if (relay_error > 0) then
+        cycle % To next element
+      endif
+
+      save '' ct_missing
+      save '' ct_br_mismatch
+      save '' vt_missing
+      save '' vt_br_mismatch
+      save '' vt_sub_mismatch
+
+      % Split for AUX elements in pilot schemes vs other AUX
+      % Also ignore Recloser relays
+      if (rlmodel = "GENERIC_RECLOSING") then
+        cycle % To next element in this relay
+      else
+        save "" rlzun
+        % Get settings for display - for now, only time delay
+        save ' ' dum_set
+        save strcat("'select PICKUP_TIME from AUX_ELEMENT_DATA where RELAY_TAG = ",
+        ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_float sql_query ele_dly
+        save ' ' ele_charac
+        save contact_logic_code cse elclcode
+
+        % TripCBFlag
+        save strcat("'select TRIP_CB from AUX_ELEMENT_DATA where RELAY_TAG = ",
+        ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query TripCBFlag
+
+        if (elclcode <> '') then
+          increment(numeles_in_lzop_with_clc)
+        endif
+        if (TripCBFlag = 'Y') then
+          increment(numeles_in_lzop_with_tripcb)
+        endif
+
+        save strcat(dum_na(1:7),'|',dum_na(1:7),'|',dum_set(1:7),'|',dum_set(1:6),'|',dum_na(1:6),'|',
+          ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+        save strcat(dum_na,',',dum_na,',',dum_set,',',dum_set,',',dum_na,',',
+          ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+
+        % Get its functional designation. If blank at system level, go to model level
+        % Since CUPL variable support is not available yet, go directly to the DB table
+        save strcat("'select FUNCTION_TYPE from AUX_ELEMENT_DATA where RELAY_TAG = ",
+        ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+        db_get_string sql_query elfunctype
+
+        if (elfunctype = " " OR elfunctype = "-999") then
+          % Fetch default function designation
+          save strcat("'select FUNCTION_TYPE_DEFAULT from AUX_ELEMENT_RANGES where STYLE = ",'"',
+          rlstyle,'"',' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+          db_get_string sql_query elfunctype
+        endif
+
+        % One final check for pilot wizard elements
+        if (elfunctype = " " OR elfunctype = "-999") then
+          if (rlmodel = "PILOT_WIZARD") then
+            if (rlstyle = "DCB_WIZARD") then
+              save "DCB" elfunctype
+            elseif (rlstyle = "POTT_WIZARD" OR rlstyle = "POTT_WIZARD_3TERM") then
+              save "POTT" elfunctype
+            elseif (rlstyle = "PUTT_WIZARD") then
+              save "PUTT" elfunctype
+            elseif (rlstyle = "DUTT_WIZARD") then
+              save "DUTT" elfunctype
+            elseif (rlstyle = "CDIFF_WIZARD" OR rlstyle = "CDIFF_WIZARD_3TERM") then
+              save "CDIFF" elfunctype
+            elseif (rlstyle = "GENERIC_TT_WIZARD") then
+              save "TRANSF_TRIP" elfunctype
+            elseif (rlstyle = "DCUB_WIZARD") then
+              save "DCUB" elfunctype
+            endif
+          endif
+        endif
+
+      endif
+    elseif (rlcod = 'CDIFF') then
+      save strcat ('store_element ',ntoa(rltag),' ',rlcod,' "',rldes,'"') str1
+      screen_reports off
+      str1 % Element stored.
+      screen_reports on
+      if (relay_error > 0) then
+        cycle % To next element
+      endif
+
+      % For now
+      save '' ct_missing
+      save '' ct_br_mismatch
+      save '' vt_missing
+      save '' vt_br_mismatch
+      save '' vt_sub_mismatch
+
+      % Don't need a functional designation. TRIP_CB alone is enough
+      save "CDIFF" elfunctype
+
+      % Get settings for display
+      save '' dum_set
+      save '' ele_charac
+      save contact_logic_code cse elclcode
+
+      % TripCBFlag
+      save strcat("'select TRIP_CB from CURRENT_DIFF_ELEMENT_DATA where RELAY_TAG = ",
+      ntoa(rltag),' AND ELEMENT_DESIGNATION = "',rldes,'"',"'") sql_query
+      db_get_string sql_query TripCBFlag
+
+      if (elclcode <> '') then
+        increment(numeles_in_lzop_with_clc)
+      endif
+      if (TripCBFlag = 'Y') then
+        increment(numeles_in_lzop_with_tripcb)
+      endif
+
+      save strcat('       ','|',dum_na(1:7),'|',dum_set(1:7),'|',dum_set(1:6),'|',dum_na(1:6),'|',
+        dum_set(1:8),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
+      save strcat(' ',',',dum_na,',',dum_set,',',dum_set,',',dum_na,',',
+        dum_set,',',ele_charac,',',TripCBFlag) relay_setting_string_file
+
+    endif
+
+    if (rlcod = 'IOC' OR rlcod = 'TOC' OR rlcod = 'DIST' OR rlcod = 'TIMER' OR
+      rlcod = 'AUX' OR rlcod = 'CDIFF') then
+      % If element function type is still not available, set it to "Not Defined"
+      if (elfunctype = " " OR elfunctype = "-999") then
+        save "Not Defined" elfunctype
+      endif
+
+      % Store elclcode for later duplicate Check
+      increment(numeles)
+      save elclcode lzop_clc_mat(1,numeles)
+      save false dup_clc
+      ppdcr_lookup_clc ()
+
+      %Store ct issues for later retrieval and display
+      save ct_missing     lzop_ct_issues(1,numeles)
+      save ct_br_mismatch lzop_ct_issues(2,numeles)
+
+      %Store vt issues for later retrieval and display
+      save vt_missing      lzop_vt_issues(1,numeles)
+      save vt_br_mismatch  lzop_vt_issues(2,numeles)
+      save vt_sub_mismatch lzop_vt_issues(3,numeles)
+      save strcat(rlcod(1:6),"|",rldes(1:11),"|",rlzun(1:4),"|",
+        relay_setting_string,"|",
+        elfunctype(1:21),"|",elclcode(1:18)) element_rep_string
+      save strcat(relay_rep_string,'|',element_rep_string) final_rep_string
+
+      save final_rep_string ele_screen_report(numeles)
+
+      save strcat(rlcod,",",rldes,",",rlzun,",",
+        relay_setting_string_file,",",
+        elfunctype,",",elclcode) element_rep_string_file
+      save strcat(study_datetime_str,',','"',fsubid,'","',lzname,'",',lztype,',',relay_rep_string_file,',',
+        element_rep_string_file) final_rep_string
+      save final_rep_string ele_file_report(numeles)      
+
+    endif
+  )
+)
+
+
+define_macro (ppdcr_validate_vt,
+  % We have elevtbus. Compare it against from_bus of all protected branches of the lzop
+  save lzop_type rlztag elem_lztype
+  save bus_substation_tag elevtbus vtbus_subtag
+
+  if (elem_lztype = 'XFMR') then % Protected branches already determined
+  elseif (elem_lztype = 'MISC') then % Protected branches already determined
+  else % Just use rlprot_fbus, rlprot_tbus and rlprot_cckt
+    define_matrix rlprot_branches (3)
+    save 0 numrlprot_branches
+    increment (numrlprot_branches)
+    save rlprot_fbus rlprot_branches(1, numrlprot_branches)
+    save rlprot_tbus rlprot_branches(2, numrlprot_branches)
+    save rlprot_cckt rlprot_branches(3, numrlprot_branches)
+  endif
+
+  save 1 vtbrindx
+  dowhile (vtbrindx <= numrlprot_branches,
+    save rlprot_branches(1,vtbrindx) rlprot_fbus
+    save rlprot_branches(2,vtbrindx) rlprot_tbus
+    save rlprot_branches(3,vtbrindx) rlprot_cckt
+    save bus_substation_tag rlprot_fbus rlprotfbus_subtag
+    save bus_substation_tag rlprot_tbus rlprottbus_subtag
+    if (vtbus_subtag = rlprotfbus_subtag) then
+      save TRUE vtsubmatchfound
+      if (elevtbus = rlprot_fbus) then
+        save TRUE vtmatchfound
+        break
+      endif
+    endif
+    if (vtbus_subtag = rlprottbus_subtag) then
+      save TRUE vtsubmatchfound
+      if (elevtbus = rlprot_tbus) then
+        save TRUE vtmatchfound
+        break
+      endif
+    endif
+    increment(vtbrindx)
+  )
+)
+
+
+define_macro (ppdcr_validate_ctbranch,
+  % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+  % We know already that CT is not missing because opcctype is not blank or null.
+
+  % First, use LZOP tag, rlztag and get all protected branches for the LZOP. For LINE, we already
+  % have rlprot_fbus, _tbus and _cckt. For MISC, get list of protected branches.
+  % For XFMR LZOP: get LZOP_ID (EQUIPMENT_NAME) and SUBSTATION_TAG. Use these two to get transformer tag from
+  % N_CIRCUIT_TRANSFORMER_DATA. Use transformer tag into NCKT_TRANSFORMER_DETAILS to get from, to, ckt combos.
+
+  save lzop_type rlztag elem_lztype
+  save bus_substation_tag ct_local_bus ctlocal_subtag
+
+  if (elem_lztype = 'XFMR') then % Protected branches already determined
+  elseif (elem_lztype = 'MISC') then % Protected branches already determined
+  else % Just use rlprot_fbus, rlprot_tbus and rlprot_cckt
+    define_matrix rlprot_branches (3)
+    save 0 numrlprot_branches
+    increment (numrlprot_branches)
+    save rlprot_fbus rlprot_branches(1, numrlprot_branches)
+    save rlprot_tbus rlprot_branches(2, numrlprot_branches)
+    save rlprot_cckt rlprot_branches(3, numrlprot_branches)
+  endif
+
+  % Use ct_local_bus, ct_remote_bus and ct_circuit to compare against f-t-c combinations from rlprot_branches
+  save 1 ctbrindx
+  dowhile (ctbrindx <= numrlprot_branches,
+    save rlprot_branches(1, ctbrindx) rlprot_fbus
+    save rlprot_branches(2, ctbrindx) rlprot_tbus
+    save rlprot_branches(3, ctbrindx) rlprot_cckt
+    save bus_substation_tag rlprot_fbus rlprotfbus_subtag
+    save bus_substation_tag rlprot_tbus rlprottbus_subtag
+    if (ctlocal_subtag = rlprotfbus_subtag) then % rlprot_fbus and ct_local_bus are in the same substation
+      if (ct_local_bus = rlprot_fbus AND ct_remote_bus = rlprot_tbus AND ct_circuit = rlprot_cckt) then
+        save TRUE ctmatchfound
+        break
+      endif
+    endif
+    if (ctlocal_subtag = rlprottbus_subtag) then % rlprot_tbus and ct_local_bus are in the same substation
+      if (ct_local_bus = rlprot_tbus AND ct_remote_bus = rlprot_fbus AND ct_circuit = rlprot_cckt) then
+        save TRUE ctmatchfound
+        break
+      endif
+    endif
+    if (elem_lztype = 'XFMR') then % For XFMR LZOPs, check opposite orientation, when all terminals of xfmr are in same substation.
+      if (ct_local_bus = rlprot_tbus AND ct_remote_bus = rlprot_fbus AND ct_circuit = rlprot_cckt) then
+        save TRUE ctmatchfound
+        break
+      endif
+    endif
+    increment(ctbrindx)
+  )
+)
+
+define_macro (ppdcr_lookup_clc,
+  save 1 myjindx
+  dowhile (myjindx <= num_uniq_clcs_in_lzop,
+    save uniq_clc_matrix(1,myjindx) myCLC
+    if (myCLC = elclcode) then
+      % The code for the current element already exists on another element in the LZOP. Mark as duplicate
+      save true dup_clc
+      if (elclcode = '' OR elclcode = ' ') then
+        save 0 newclcnum
+      else
+        save uniq_clc_matrix(2,myjindx) + 1 newclcnum
+      endif
+      save newclcnum uniq_clc_matrix(2,myjindx)
+      save myjindx lzop_clc_mat(2,numeles)
+      break
+    endif
+    increment(myjindx)
+  )
+  if (not dup_clc) then
+    increment(num_uniq_clcs_in_lzop)
+    save elclcode uniq_clc_matrix(1,num_uniq_clcs_in_lzop)
+    if (elclcode = '' OR elclcode = ' ') then
+      save 0 uniq_clc_matrix(2,num_uniq_clcs_in_lzop)
+    else
+      save 1 uniq_clc_matrix(2,num_uniq_clcs_in_lzop)
+    endif
+    save num_uniq_clcs_in_lzop lzop_clc_mat(2,numeles)
+  endif
+)
+
+define_macro (ppdcr_check_misc_lzop,
+  % Sometimes, we might have a MISC lzop, containing the line relays and BF relays.
+  % Query MISC LZOP data tables for protect data containing the branch $1-$2-$3.
+  save strcat(' where lzop.substation_tag = ', ntoa(subtag)) as temp_sql_string
+  save strcat(temp_sql_string, ' and lzop.lzop_type = "MISC" ') as temp_sql_string
+  save strcat(temp_sql_string, ' and misc.lzop_tag = lzop.lzop_tag ') as temp_sql_string
+  save strcat(temp_sql_string, ' and ((((misc.from_bus_number = ', ntoa($1)) as temp_sql_string
+  save strcat(temp_sql_string, ' and misc.to_bus_number = ', ntoa($2), ') or ') as temp_sql_string
+  save strcat(temp_sql_string, ' (misc.from_bus_number = ', ntoa($2)) as temp_sql_string
+  save strcat(temp_sql_string, ' and misc.to_bus_number = ', ntoa($1), ')) ') as temp_sql_string
+  save strcat(temp_sql_string, ' and (misc.circuit_number = ', ntoa($3), ')) or ') as temp_sql_string
+  save strcat(temp_sql_string, ' (misc.protected_equipment_type = "W" ') as temp_sql_string
+  save strcat(temp_sql_string, ' and misc.from_bus_number = ', ntoa($1), '))') as temp_sql_string
+
+  save strcat('''select cast (lzop.lzop_tag as integer) as lzop_tag from local_zone_of_prot_data lzop, misc_lzop_protect_data misc ',
+            temp_sql_string,'''') as temp_sql_string
+  save sizeof(temp_sql_string) lsiztss
+  save temp_sql_string(2:lsiztss-1) sql_query
+  save 'LZTMatrix' as sql_matrix_name
+  test_help_form 'DBE SQL TO MATRIX'
+  % Matrix LZTMatrix now contains all LZOP tags whose PROTECT_DATA contains the study branch f-t-c.
+  save sizeof(LZTMatrix) NumCells
+  save NumCells/sql_matrix_rows as numlztags
+)
+
+define_macro (ppdcr_remove_illegal_chars,
+  save sizeof($1) sizwmfil
+  save ' ' junk_wmf_file
+  save 1 sizindx
+  dowhile (sizindx <= sizwmfil,
+    save $1(sizindx:sizindx) junkchar
+    if (junkchar = '/' OR junkchar = '\' OR junkchar = ':' OR junkchar = '*'
+     OR junkchar = '?' OR junkchar = '"' OR junkchar = '<' OR junkchar = '>'
+     OR junkchar = '|' OR junkchar = ' ') then
+      save '_' newjchar
+    else
+      save junkchar newjchar
+    endif
+    if (junk_wmf_file = ' ') then
+      save newjchar junk_wmf_file
+    else
+      save strcat(junk_wmf_file,newjchar) junk_wmf_file
+    endif
+    increment(sizindx)
+  )
+  save junk_wmf_file $1
+)
+
+
+system_macro ppdcr_get_relays_from_lzop
+             ppdcr_get_element_info
+             ppdcr_lookup_clc
+             ppdcr_print_terminal_data
+             ppdcr_check_misc_lzop
+             ppdcr_remove_illegal_chars
+             ppdcr_validate_ctbranch
+             ppdcr_validate_vt
+             x
+
+echo on
+log_echo on
+return

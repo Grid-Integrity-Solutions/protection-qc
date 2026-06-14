@@ -8,7 +8,7 @@ using APA macros and a Power BI reporting tool.
 ## Installation and Quickstart
 
 1. Download this repository (`Code -> Download ZIP`)
-2. Follow the instructions in `Evaluating Protection Data Model Quality for Coordination Reviews (Doc).pdf`
+2. Follow the instructions in `Evaluating Protection Data Model Quality for Coordination Reviews.pdf`
 
 ## Technical support
 

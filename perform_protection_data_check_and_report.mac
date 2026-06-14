@@ -1,0 +1,625 @@
+define_macro (perform_protection_data_check_and_report,
+
+  cls
+  save auto_redraw saved_ar
+  auto_redraw off
+  refresh_protection_data  % will force update of default function types
+
+  save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b Protection Data Quality Check') LineRowString
+  write_to_screen LineRowString
+  write_to_screen ''
+
+  % Check schema version number. Must be 3.64 or greater
+  db_get_float "select schema_version_no from misc_data" DB_REV
+  save DB_REV*1000 DB_REV
+  if (DB_REV < 3640) then
+    msg_pop_form('Please update database schema to version 3.64 or later before running this macro')
+    auto_redraw saved_ar
+    interrupt
+  endif
+
+  define_array mysub_array % Will store substation_ids
+
+  % Get user inputs
+  ppdcr_inputs
+%auto_redraw saved_ar interrupt
+  % Process user inputs
+
+  save mq_response(mq_volts,1) assign_kv
+
+  save date_time study_datetime_str
+  save strcat('Protection data quality check started at ',study_datetime_str) LineRowString
+  write_to_screen LineRowString
+
+  % Assign/Display codes at one substation or all substations in DB?
+  save mq_response(rly_chk_type,1) chktype
+  if (chktype = 1) then % Assign/Display on one transmission line or transformer
+    write_to_screen 'Perform protection data check for relays on one line or transformer'
+    % Read line info
+    save mq_response(mq_line,1) fbus
+    save mq_response(mq_line,2) tbus
+    save mq_response(mq_line,3) cckt
+    if (fbus <= 0 OR tbus <= 0) then
+      msg_pop_form ('Please select a valid line or transformer for the protection data check')
+      auto_redraw saved_ar
+      interrupt
+    endif
+
+    save base_kv fbus fbkv
+
+    % Valid branch (line or xfmr) found; add to sete ppdcr_start_line
+    define_branch_set (ppdcr_start_line, NULL)
+    add_to_branch_set ppdcr_start_line fbus tbus cckt
+
+  elseif (chktype = 2) then
+    write_to_screen 'Perform protection data check for relays in one substation'
+    save mq_response(mq_sub,1) fsubid
+    if (sizeof(fsubid) <= 1) then
+      msg_pop_form ("You must select one substation")
+      auto_redraw saved_ar
+      interrupt
+    endif
+
+  else %if (chktype = 4) then
+    write_to_screen 'Perform protection data check for relays in all substations'
+  endif
+
+  save mq_response(mq_bus_area,1) selected_barea
+  if (selected_barea <= 0) then save 1 selected_barea endif
+  save 0 ii
+  if(test_bit(selected_barea,ii)) then % None Selected
+    save "" bus_area_string
+  else
+    save ' AND (' bus_area_string
+    save 0 num_areas_selected
+    save 1 ii
+    dowhile (ii < num_areas_in_db,
+      if(test_bit(selected_barea,ii)) then
+        increment(num_areas_selected)
+        save bus_area_info(1,ii) mybusarea
+        save bus_area_info(2,ii) mybusareaname
+        if (ii = 1) then
+          save strcat(bus_area_string,'bus_area = ',ntoa(mybusarea)) bus_area_string
+        else
+          save strcat(bus_area_string,' or bus_area = ',ntoa(mybusarea)) bus_area_string
+        endif
+      endif
+      increment(ii)
+      if (num_areas_selected >= 5) then break endif
+    )
+    save strcat(bus_area_string,')') bus_area_string
+  endif
+  %save strcat('Bus area string: ',bus_area_string) LineRowString
+  %write_to_screen LineRowString
+%auto_redraw saved_ar interrupt
+
+  % MKDIR for storing the CSV output files
+  save strcat("system_command 'mkdir PPDCR_Output_Files\Ele_Output'") str1
+  str1
+  save strcat("system_command 'mkdir PPDCR_Output_Files\Sub_Output'") str1
+  str1
+
+  % Open report file for writing CSV output - two files, one for LZOP-level data; other for Element-level data
+  %save date_time study_datetime_str
+  save strcat(study_datetime_str,"_ppdcr_ele_outputs.csv") ppdcr_ele_outputs_file_name
+  ppdcr_remove_illegal_chars(ppdcr_ele_outputs_file_name)
+%dis ppdcr_ele_outputs_file_name
+%auto_redraw saved_ar
+%interrupt
+  save strcat("system_command 'del ",'"',ppdcr_ele_outputs_file_name,'"',"'") str1
+  str1  % Delete previous file
+  save strcat('report_append "',ppdcr_ele_outputs_file_name,'"') str1
+  str1 % Open the report file
+  report_header OFF
+  screen_reports OFF
+  % Create string for CSV file write
+  save strcat('Date_Time,SubstationID,LZOP_Name,LZOP_Type,Relay_Tag,Relay_Name,Protection_Scheme,Relay_Style,',
+    'Element_Code,Designation,Zone,CT_Ratio,PT_Ratio,Reach_in_ohms_or_Pickup_in_Amps,MTA,Reach_%,',
+    'Time_Dial_or_Time_Delay,Inverse_Time_Characteristic,TripCB,Element_Function_Type,Contact_Logic_Code,Is_Duplicate_CLC,',
+    'Is_CT_Missing,Is_CT_branch_mismatch,Is_VT_Missing,Is_VT_bus_branch_mismatch,Is_VT_substation_mismatch,Asset_kV') LineRowString
+  write_to_file_ns LineRowString
+  file_reports OFF
+  screen_reports ON
+
+  % Open report file for writing substation level CSV output.
+  save strcat(study_datetime_str,"_ppdcr_sub_outputs.csv") ppdcr_sub_outputs_file_name
+  ppdcr_remove_illegal_chars(ppdcr_sub_outputs_file_name)
+  save strcat("system_command 'del ",'"',ppdcr_sub_outputs_file_name,'"',"'") str1
+  str1  % Delete previous file
+  save strcat('report_append "',ppdcr_sub_outputs_file_name,'"') str1
+  str1 % Open the report file
+  report_header OFF
+  screen_reports OFF
+  % Create string for CSV file write
+  save strcat('Date_Time,Substation_Tag,SubstationID,Asset_kV,Asset_Type,',
+    'Asset_FromBus,Asset_FromBusName,Asset_ToBus,Asset_ToBusName,Asset_Circuit,',
+    'Is_LZOP_Present,LZOP_Tag,LZOP_Type,LZOP_Name,Is_LZOP_Logic_Present,LZOP_Logic_Code,',
+    'Are_Relays_Present,Are_Elements_with_CLC_Present,Is_Duplicate_CLC,',
+    'Any_Elements_with_tripCB_Y_Without_CLC,Any_CT_Issues,Any_VT_Issues') LineRowString
+  write_to_file_ns LineRowString
+  file_reports OFF
+  screen_reports ON
+
+  if (chktype = 1) then % One line or xfmr
+    % Arrays/sets for later use
+    define_bus_set (ppdcr_buses, NULL)
+    define_array ppdcr_branch_tags  % Array to store tags already processed
+    save 0 num_brtags
+    ppdcr_for_branch_set ()
+
+  elseif (chktype = 2) then % Process all branches in a sub, including remote terminals
+
+    save strcat("define_bus_set (ppdcr_buses, bus_substation_id = '",fsubid,"' AND base_kv > assign_kv",
+      bus_area_string,
+      ")") str1 %dis str1 auto_redraw saved_ar interrupt
+    str1
+    sort_bus_set ppdcr_buses substation_id asc base_kv desc bus_number asc x
+
+    define_array ppdcr_branch_tags  % Array to store tags already processed
+    save 0 num_brtags
+    ppdcr_process_buses()
+
+  elseif (chktype = 4) then % Process all substations
+    write_to_screen 'Building list of substations ...'
+
+    save strcat("define_bus_set(ppdcr_buses, allbuses AND base_kv > assign_kv",
+      bus_area_string,
+      ")") str1
+    str1
+
+    save 0 numsubs
+    define_array mysubarray
+
+    % Build list of substation IDs
+    doset (ppdcr_buses,
+      save #k fbus
+      save bus_is_real fbus fbreal
+      save bus_type fbus fbtype
+      if (NOT fbreal OR fbtype = "DR") then % Ignore FICT buses, and REAL DR buses
+        cycle % To next bus
+      endif
+      save basekv fbus fbkv
+      save bus_substation_id fbus fsubid
+
+      save TRUE sub_is_unique
+      save 1 numsubidx
+      dowhile (numsubidx <= numsubs,
+        save mysubarray(numsubidx) mysubid
+        if (mysubid = fsubid) then % Already stored
+          save FALSE sub_is_unique
+          break
+        endif
+        increment(numsubidx)
+      )
+      if (sub_is_unique) then
+        increment(numsubs)
+        save fsubid mysubarray(numsubs)
+      endif
+    )
+    % Now we can process each subid in mysubarray
+    save 1 numsubidx
+    dowhile (numsubidx <= numsubs,
+      save mysubarray(numsubidx) fsubid
+      save strcat("define_bus_set (ppdcr_buses, bus_substation_id = '",fsubid,"' AND base_kv > assign_kv",
+       bus_area_string,
+       ")") str1 % dis str1 auto_redraw saved_ar interrupt
+      str1
+      sort_bus_set ppdcr_buses substation_id asc base_kv desc bus_number asc x
+      define_array ppdcr_branch_tags  % Array to store tags already processed
+      save 0 num_brtags
+      ppdcr_process_buses()
+      increment(numsubidx)
+    )
+
+  else  % Problem
+    dis 'Invalid selection'
+  endif
+
+  % Open the ele CSV report file and finalize it.
+  save strcat('report_append "',ppdcr_ele_outputs_file_name,'"') str1
+  str1
+  save_report % Finalize CSV file output.
+  % Copy to output folder.
+  save strcat("system_command 'copy ",'"',ppdcr_ele_outputs_file_name,'" PPDCR_Output_Files\Ele_Output',"'") str1
+  str1
+  % Delete the file in the user folder
+  save strcat("system_command 'del ",'"',ppdcr_ele_outputs_file_name,'"',"'") str1
+  str1
+
+  % Open the sub CSV report file and finalize it.
+  save strcat('report_append "',ppdcr_sub_outputs_file_name,'"') str1
+  str1
+  save_report % Finalize CSV file output.
+  % Copy to output folder.
+  save strcat("system_command 'copy ",'"',ppdcr_sub_outputs_file_name,'" PPDCR_Output_Files\Sub_Output',"'") str1
+  str1
+  % Delete the file in the user folder
+  save strcat("system_command 'del ",'"',ppdcr_sub_outputs_file_name,'"',"'") str1
+  str1
+
+  auto_redraw saved_ar
+
+%  save strcat('') LineRowString
+%  write_to_screen LineRowString
+
+%  save strcat('') LineRowString
+%  write_to_screen LineRowString
+
+  save date_time end_study_datetime_str
+  save strcat('Protection data quality check finished at ',end_study_datetime_str) LineRowString
+  write_to_screen LineRowString
+
+)
+
+
+define_macro (ppdcr_process_buses,
+  doset(ppdcr_buses,
+    define_branch_set (ppdcr_start_line, NULL) % We are going to re-define branch set for each bus
+
+    save #k fbus
+    save bus_is_real fbus fbreal
+    save bus_type fbus fbtype
+    if (NOT fbreal OR fbtype = "DR") then % Ignore FICT buses, and REAL DR buses
+      cycle % To next bus
+    endif
+    save basekv fbus fbkv
+    save bus_id fbus fbusid
+
+    % Find lines connected to fbus and add them to ppdcr_start_line
+    dobranches (fbus,
+      save #k myfbus
+      save #m mytbus
+      save #c mycckt
+      save basekv myfbus myfbkv
+      save branch_type myfbus mytbus mycckt mybrtype
+      if (mybrtype = 'REAC') then
+        cycle % Series reactor branches skipped
+      endif
+        
+      % Check if this branch has already been processed
+      save branch_tag myfbus mytbus mycckt mybrtag
+      save FALSE branch_already_processed
+	  ppdcr_check_branch_processed()
+	  if (branch_already_processed) then
+	    cycle % To next branch connected at fbus
+	  else % Add this tag to ppdcr_branch_tags
+        increment(num_brtags)
+	    save mybrtag ppdcr_branch_tags(num_brtags)
+      endif
+      add_to_branch_set ppdcr_start_line myfbus mytbus mycckt
+      save strcat('Adding branch ',ntoa(myfbus),'-',ntoa(mytbus),'-',ntoa(mycckt)) mymsgstr
+      message mymsgstr
+
+      if (mybrtype = 'TCKT' or mybrtype = 'XFMR') then  % Nckt transformer. Don't look for remotes
+        cycle
+      endif
+
+      doremote(myfbus mytbus mycckt,
+        save #k lbfbus
+        save #m rbus
+        save #c lbcckt
+        save branch_tag lbfbus rbus lbcckt mybrtag
+        save basekv rbus rbkv
+        save bus_type rbus rbtype
+        save bus_is_real rbus rbreal
+        if (rbtype = "OB" OR rbtype = "DR" OR NOT rbreal) then
+          % Avoid open breaker and fictitious buses
+          cycle
+        endif
+        if (abs(rbkv - myfbkv) > 5 and rbkv <= assign_kv) then % Ok to work on transformers; accept as part of the path
+          cycle % To next remote bus
+        endif
+        if (rbreal) then
+          increment(num_brtags)
+          save mybrtag ppdcr_branch_tags(num_brtags)
+          % This will prevent the remote terminal starting path from being
+          % added to the ppdcr_start_line set.
+        endif
+      ) % End of do_remote
+    ) % End of dobranches at fbus
+
+    % ppdcr_START_LINE set now has a set of branches it can work with.
+    ppdcr_for_branch_set ()
+
+  ) % Processed all buses in ppdcr_buses
+)
+
+
+define_macro (ppdcr_for_branch_set,
+  % ppdcr_START_LINE branch set can now be used to determine the protection information
+  doset (ppdcr_START_LINE,
+    save #k myfbus
+    save #m mytbus
+    save #c mycckt
+
+    save 0 num_terminals
+    define_matrix rem_paths(5) % 4, 5 store remote bus with shortest
+
+    % Starting line terminal or transformer
+    increment(num_terminals)
+    save myfbus rem_paths(1,num_terminals)
+    save mytbus rem_paths(2,num_terminals)
+    save mycckt rem_paths(3,num_terminals)
+
+    save branch_type myfbus mytbus mycckt mybrtype
+    save basekv fbus myfbkv
+    if (mybrtype = 'TCKT' OR mybrtype = 'XFMR' OR chktype = 4 ) then
+      % Transformer branch OR doing all substations --> do not look for remote buses
+    else
+      % Not a transformer; not doing all substations
+      % Do remote to determine number of terminals.
+      doremote (myfbus mytbus mycckt,
+        save #k lbfbus
+        save #m rbus
+        save #c lbcckt
+        save branch_tag lbfbus rbus lbcckt mybrtag
+        save basekv rbus rbkv
+        save bus_type rbus rbtype
+        save bus_is_real rbus rbreal
+        save bus_substation_id rbus rsubid
+
+        if (rbtype = "OB" OR rbtype = "DR" OR NOT rbreal) then
+          % Avoid open breaker and fictitious buses
+          cycle
+        endif
+        if (abs(rbkv - myfbkv) > 5 AND rbkv <= assign_kv) then % Line terminates at a transformer. It is valid.
+          cycle % To next remote bus
+        else
+           save FALSE xfmr_termination
+        endif
+      
+        if (rbreal) then % Get remote terminal info
+          increment(num_terminals)
+%          save strcat(line_rep_string,'; Remote Terminal: ',rsubid) line_rep_string
+          save   rbus rem_paths(1,num_terminals)
+          save lbfbus rem_paths(2,num_terminals)
+          save lbcckt rem_paths(3,num_terminals)
+        endif
+      ) % Finished doremote - all terminal info available
+    endif
+
+%auto_redraw saved_ar interrupt
+    % For each starting segment, store impedance to each remote bus
+    save 1 kindx
+    dowhile (kindx <= num_terminals,
+      save rem_paths(1,kindx) fbus
+      save rem_paths(2,kindx) tbus
+      save rem_paths(3,kindx) cckt
+      save 99999 zpath_imp_min
+      doremote (fbus tbus cckt,
+        save #m rbus
+        save basekv rbus rbkv
+        save bus_type rbus rbtype
+        save bus_is_real rbus rbreal
+        if (rbtype = "OB" OR rbtype = "DR" OR NOT rbreal) then
+          % Avoid open breaker and fictitious buses
+          cycle
+        endif
+        if (abs(rbkv - myfbkv) > 5 AND rbkv <= assign_kv) then
+          cycle % To next remote bus
+        endif
+        if (rbreal) then % dopath to rbus
+          save 0.0 zpath_imp
+          dopath (fbus tbus cckt rbus,
+            save zkmp #k #m #c zsegment
+            save zsegment + zpath_imp zpath_imp
+          )
+          % Store only shortest distance a remote bus
+          % After dopath, store info in rem_paths
+          if (abs(zpath_imp) < zpath_imp_min) then
+            save zpath_imp zpath_imp_min
+            save rbus rem_paths(4,kindx)
+            save zpath_imp rem_paths(5,kindx)
+          endif
+        endif        
+      )
+
+      increment(kindx)
+    )
+
+    % We can now retrieve and print data for each terminal
+    save 1 kindx
+    dowhile (kindx <= num_terminals,
+      save rem_paths(1,kindx) fbus
+      save rem_paths(2,kindx) tbus
+      save rem_paths(3,kindx) cckt
+
+      save bus_id fbus myfbusid
+      save bus_id tbus mytbusid
+      save basekv fbus myfbkv
+      save strcat(myfbusid,'-',mytbusid,' ckt. ',ntoa(cckt)) line_rep_string
+
+      save branch_type myfbus mytbus mycckt mybrtype
+      if (mybrtype = 'TCKT' OR mybrtype = 'XFMR') then
+        save xfmr_name myfbus mytbus mycckt xfname
+        save strcat(line_rep_string,' (Name: ',xfname,')') line_rep_string
+      else % Line, append impedance to shortest remote bus
+        save rem_paths(4,kindx) rbus
+        if (rbus > 0) then % True remote bus found
+          save bus_id rbus rbusid
+          save rem_paths(5,kindx) zpath_imp
+          save zpath_imp*baseohms fbus zpath_imp_prim
+          save strcat(line_rep_string,
+            '; Shortest path to remote bus: ',rbusid,' @ ',
+            ntoa(abs(zpath_imp_prim)),' ohms @ ',ntoa(arg(zpath_imp_prim)),' deg.') line_rep_string
+        else % In index 4 and 5 of rem_paths, we do not have a valid remote bus.
+          % Store info until tbus, the to-bus of the starting branch.
+          save zkmp fbus tbus cckt zpath_imp
+          save zpath_imp*baseohms fbus zpath_imp_prim
+          save strcat(line_rep_string,
+            '; Shortest path to remote bus: ',mytbusid,' @ ',
+            ntoa(abs(zpath_imp_prim)),' ohms @ ',ntoa(arg(zpath_imp_prim)),' deg.') line_rep_string
+        endif
+      endif
+
+      ppdcr_print_terminal_data ()
+      increment(kindx)
+    ) % Finished all line terminals given a starting path
+  ) % Finished all paths for which protection info was requested
+)
+
+
+define_macro (ppdcr_inputs,
+
+  define_array  MQ_TYPE
+  define_array  MQ_PROMPT
+  define_array  MQ_NUM_CHOICES
+  define_matrix MQ_CHOICES(6)
+  define_array  MQ_NUM_RESPONSES
+  define_matrix MQ_RESPONSE(6)
+  define_array  MQ_VISIBLE_QNUM
+  define_array  MQ_VISIBLE_OPERATOR
+  define_array  MQ_VISIBLE_VALUE
+
+  save 0  as ii
+  dowhile(ii < 6, increment(ii)
+    save '' as MQ_TYPE(ii)
+    save '' as MQ_PROMPT(ii)
+    save 0  as MQ_NUM_RESPONSES(ii)
+    save '' as MQ_RESPONSE(ii, 1)
+    save 0  as MQ_NUM_CHOICES(ii)
+    save '' as MQ_CHOICES(ii, 1)
+
+    save 0  as MQ_VISIBLE_QNUM(ii)
+    save '' as MQ_VISIBLE_OPERATOR(ii)
+    save '' as MQ_VISIBLE_VALUE(ii)
+  )  
+
+  save strcat("select AREA_NUMBER, AREA_NAME from AREA_DATA order by area_number") sql_query
+  save 'bus_area_info' as sql_matrix_name
+  test_help_form 'DBE SQL TO MATRIX'
+  save sizeof(bus_area_info) NumCells
+  save NumCells/sql_matrix_rows as num_areas_in_db
+  if (num_areas_in_db >= 20) then
+    save 20 num_areas_in_db
+  endif
+
+  exist MQ_SAVE_FILE
+  if (CUPL_VAR_EXISTS) then
+    if (MQ_SAVE_FILE = '|ApaConfigDir|\ppdcr_ips') then
+      save MQ_SAVE_FILE MQ_LOAD_FILE
+    else
+      erase MQ_LOAD_FILE x
+    endif
+  else
+    erase MQ_LOAD_FILE x
+  endif
+  
+  erase MQ_HELP_FILE x
+  save 0 MQ_N
+  save 'Perform protection data check and report' MQ_TITLE
+  save strcat('Specify parameters below:') MQ_DESCRIPTION
+  save 1 mq_columns
+
+  % Study one substation, all substations, or one particular line
+  increment(mq_n)
+  save mq_n rly_chk_type
+  save 'TR' mq_type(mq_n)
+  save 'Check protection data for one line/transformer, one substation or all substations?' mq_prompt(mq_n)
+  save 3 mq_num_choices(mq_n)
+  save 'All terminals of one transmission line or transformer (in Q2)' mq_choices(mq_n,1)
+  save 'All lines/transformers out of one substation including remote terminals (in Q3)' mq_choices(mq_n,2)
+  save 'All substations' mq_choices(mq_n,3)
+  exist mq_load_file
+  if (not CUPL_VAR_EXISTS) then
+    save 1 mq_response(mq_n,1)
+  endif
+
+  % Choose line or transformer
+  increment(mq_n)
+  save mq_n mq_line
+  save 'BRANCH' mq_type(mq_n)
+  save 'Choose line or transformer for protection data quality check' mq_prompt(mq_n)
+  save 1 mq_num_responses(mq_n)
+
+  % Choose substation
+  increment(mq_n)
+  save mq_n mq_sub
+  save 'SUBSTATION' mq_type(mq_n)
+  save 'Choose substation for protection data quality check' mq_prompt(mq_n)
+  save 1 mq_num_responses(mq_n)
+
+  % Voltage restriction
+  increment(mq_n)
+  save mq_n mq_volts
+  save 'N' mq_type(mq_n)
+  save 3 mq_num_choices(mq_n)
+  save 0 mq_choices(mq_n,1)
+  save 150 mq_choices(mq_n,2)
+  save 0.01 mq_choices(mq_n,3)
+  save 'Specify threshold voltage (kV) below which equipment terminals can be ignored' mq_prompt(mq_n)
+  save 1 mq_num_responses(mq_n)
+  exist mq_load_file
+  if (not CUPL_VAR_EXISTS) then
+    save 35 mq_response(mq_n,1)
+  endif
+
+  % Choose bus_area
+  if (num_areas_in_db > 0) then
+    increment(mq_n)
+    save mq_n mq_bus_area
+    save 'TM' mq_type(mq_n)
+    save 'Choose bus area to restrict data evaluation (up to 5) or 0-None to include all buses' MQ_PROMPT(MQ_N)
+    save num_areas_in_db MQ_NUM_CHOICES(mq_n)
+    save '0-None' MQ_CHOICES(mq_n,1)
+    save 1 ii
+    dowhile (ii <= num_areas_in_db,
+      save bus_area_info(1,ii) barea_num
+      save bus_area_info(2,ii) barea_name
+      save ii+1 area_store_index
+      save strcat(ntoa(barea_num),'-',barea_name) MQ_CHOICES(mq_n,area_store_index)
+      increment(ii)
+    )
+    exist mq_load_file
+    if (not CUPL_VAR_EXISTS) then
+      save 1 mq_response(mq_n,1)
+    endif
+  endif
+
+  save '|ApaConfigDir|\ppdcr_ips' MQ_SAVE_FILE
+  
+  % Call the mq_form
+  help_form mq_popup
+  message 'Answer the questions on the form'
+  read(' ') str1
+  if (str1 = 'X' or str1 = ' ') then
+    dis 'Macro cancelled by user'
+    auto_redraw saved_ar
+    interrupt
+  endif
+  
+  if (mq_n = 0) then
+    dis 'Macro cancelled by user'
+    auto_redraw saved_ar
+    interrupt
+  endif
+)
+
+
+define_macro (ppdcr_check_branch_processed,
+  % Check if mybrtag belongs to ppdcr_branch_tags array
+  % num_brtags is the number of tags stored so far
+  save 1 brtagindx
+  dowhile (brtagindx <= num_brtags,
+    save ppdcr_branch_tags(brtagindx) testbrtag
+	if (testbrtag = mybrtag) then
+	  % mybrtag has already been processed
+	  save TRUE branch_already_processed
+	  break % No need to check any more branch tags
+	endif
+	increment(brtagindx)
+  )
+)
+
+define_macro (ppdcr, perform_protection_data_check_and_report)
+
+input |ApaUserDir|\perform_protection_data_check_and_report_utils1.mac
+
+system_macro ppdcr_inputs
+             ppdcr_check_branch_processed
+             ppdcr_for_branch_set
+             ppdcr_process_buses
+             ppdcr
+             x
+
+return
