@@ -5,7 +5,16 @@ define_macro (perform_protection_data_check_and_report,
   auto_redraw off
   refresh_protection_data  % will force update of default function types
 
-  save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b Protection Data Quality Check') LineRowString
+  save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b Protection Data Quality Check}') LineRowString
+  write_to_screen LineRowString
+  write_to_screen ''
+
+  save 1.1 PPDCR_Macro_REV
+  save "2026-06-17"  PPDCR_Macro_REV_Date
+  save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b Macro Revision     : ',ntoa(PPDCR_Macro_REV,'f4.1'),'}') LineRowString
+  write_to_screen LineRowString
+  write_to_screen ''
+  save strcat('{\rtf\ansi{\colortbl;\red0\green0\blue255;}{\cf1\b Macro Revision Date: ',PPDCR_Macro_REV_Date,'}') LineRowString
   write_to_screen LineRowString
   write_to_screen ''
 
@@ -272,7 +281,7 @@ define_macro (ppdcr_process_buses,
       save #c mycckt
       save basekv myfbus myfbkv
       save branch_type myfbus mytbus mycckt mybrtype
-      if (mybrtype = 'REAC') then
+      if (mybrtype = 'REAC' OR mybrtype = 'EQIV') then
         cycle % Series reactor branches skipped
       endif
         
@@ -290,7 +299,8 @@ define_macro (ppdcr_process_buses,
       save strcat('Adding branch ',ntoa(myfbus),'-',ntoa(mytbus),'-',ntoa(mycckt)) mymsgstr
       message mymsgstr
 
-      if (mybrtype = 'TCKT' or mybrtype = 'XFMR') then  % Nckt transformer. Don't look for remotes
+%      if (mybrtype = 'TCKT' or mybrtype = 'XFMR') then  % Nckt transformer. Don't look for remotes
+      if (mybrtype = 'TCKT') then  % Nckt transformer. Don't look for remotes. If XFMR, look for remotes
         cycle
       endif
 

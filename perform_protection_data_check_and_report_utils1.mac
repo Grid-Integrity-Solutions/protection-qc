@@ -28,8 +28,8 @@ define_macro (ppdcr_print_terminal_data,
 %    'Are_Relays_Present,Are_Elements_with_CLC_Present') LineRowString
 
   % Form ppdcr_sub_output string
-  save strcat(study_datetime_str,',',ntoa(subtag),',',fsubid,',',ntoa(fbkv),',',mybrtype,',',
-   ntoa(fbus),',',fbusname,',',ntoa(tbus),',',tbusname,',',ntoa(cckt)) ppdcr_sub_output_str
+  save strcat(study_datetime_str,',',ntoa(subtag),',"',fsubid,'",',ntoa(fbkv),',',mybrtype,',',
+   ntoa(fbus),',"',fbusname,'",',ntoa(tbus),',"',tbusname,'",',ntoa(cckt)) ppdcr_sub_output_str
 
   define_matrix LZTMatrix(1)
   save 0 numlztags
@@ -114,18 +114,50 @@ define_macro (ppdcr_print_terminal_data,
       % get lzop_id = equipment_name and substation_tag.
       save lzop_id lztag xfmreqname
       save lzop_substation_tag lztag xfmrsubtag
-      save strcat("'select tag from N_CIRCUIT_TRANSFORMER_DATA where substation_tag = ",ntoa(xfmrsubtag),
-        " and equipment_name = ",'"',xfmreqname,'"',"'") g_sql_string
-      %dis g_sql_string
-      db_get_int g_sql_string xfmrtag
 
-      save strcat("select FROM_BUS_NUMBER, TO_BUS_NUMBER, circuit_number from nckt_transformer_details where branch_tag = ",
-        ntoa(xfmrtag)) sql_query
-      save 'rlprot_branches' as sql_matrix_name
-      test_help_form 'DBE SQL TO MATRIX'
-      % Matrix LZTMatrix now contains all LZOP tags whose PROTECT_DATA contains the study branch f-t-c.
-      save sizeof(rlprot_branches) NumCells
-      save NumCells/sql_matrix_rows as numrlprot_branches
+      if (mybrtype = 'TCKT') then
+        save strcat("'select tag from N_CIRCUIT_TRANSFORMER_DATA where substation_tag = ",ntoa(xfmrsubtag),
+          " and equipment_name = ",'"',xfmreqname,'"',"'") g_sql_string
+        %dis g_sql_string
+        db_get_int g_sql_string xfmrtag
+
+        save strcat("select FROM_BUS_NUMBER, TO_BUS_NUMBER, circuit_number from nckt_transformer_details where branch_tag = ",
+          ntoa(xfmrtag)) sql_query
+        save 'rlprot_branches' as sql_matrix_name
+        test_help_form 'DBE SQL TO MATRIX'
+        % Matrix LZTMatrix now contains all LZOP tags whose PROTECT_DATA contains the study branch f-t-c.
+        save sizeof(rlprot_branches) NumCells
+        save NumCells/sql_matrix_rows as numrlprot_branches
+      else % Likely XFMR, 2-wdg or 3-wdg
+        % Use topology search to populate rlprot_branches. fbus, tbus, cckt is starting branch
+        save 0 numrlprot_branches
+        if (bus_type = 'XF') tbus then
+          dobranches(tbus,
+            save orig_from_bus #k #m #c g_k
+            save orig_to_bus #k #m #c g_m
+            increment(numrlprot_branches)
+            save g_k rlprot_branches(1,numrlprot_branches)
+            save g_m rlprot_branches(2,numrlprot_branches)
+            save #c rlprot_branches(3,numrlprot_branches)
+          )
+        elseif (bus_type = 'XF') fbus then
+          dobranches(fbus,
+            save orig_from_bus #k #m #c g_k
+            save orig_to_bus #k #m #c g_m
+            increment(numrlprot_branches)
+            save g_k rlprot_branches(1,numrlprot_branches)
+            save g_m rlprot_branches(2,numrlprot_branches)
+            save #c rlprot_branches(3,numrlprot_branches)
+          )
+        else % 2-wdg
+          save orig_from_bus fbus tbus cckt g_k
+          save orig_to_bus fbus tbus cckt g_m
+          increment(numrlprot_branches)
+          save g_k rlprot_branches(1,numrlprot_branches)
+          save g_m rlprot_branches(2,numrlprot_branches)
+          save cckt rlprot_branches(3,numrlprot_branches)
+        endif
+      endif
 
     elseif (lztype = 'MISC') then
       save strcat("select FROM_BUS_NUMBER, TO_BUS_NUMBER, CIRCUIT_NUMBER from MISC_LZOP_PROTECT_DATA where lzop_tag = ",
@@ -150,7 +182,7 @@ define_macro (ppdcr_print_terminal_data,
     else
       save 'true' lzlogic_present
     endif
-    save strcat(ppdcr_sub_output_str,',','true',',',ntoa(lztag),',',lztype,',',lzname,',',
+    save strcat(ppdcr_sub_output_str,',','true',',',ntoa(lztag),',',lztype,',"',lzname,'",',
       lzlogic_present,',',lzlogic) ppdcr_sub_output_str
 
     % CLCs within an LZOP must be unique. Therefore, initialize clc array for this LZOP
@@ -284,7 +316,7 @@ define_macro (ppdcr_get_relays_from_lzop,
       
       save strcat(ntoa(rtag,'i6'),"|",rlname(1:30),"|",rlscheme(1:15),"|",rlstyle(1:15)) relay_rep_string
 
-      save strcat(ntoa(rtag),",",rlname,",",rlscheme,",",rlstyle) relay_rep_string_file
+      save strcat(ntoa(rtag),',"',rlname,'","',rlscheme,'","',rlstyle,'"') relay_rep_string_file
 
       % Process element-level data
       ppdcr_get_element_info ()
@@ -625,7 +657,7 @@ define_macro (ppdcr_get_element_info,
       save strcat(ntoa(ele_ctr,'f7.2'),'|',dum_na(1:7),'|',ele_pkp_str1(1:7),'|',ele_pkp_str2(1:6),'|',dum_na(1:6),'|',
         ntoa(ele_dly,'f8.2'),'|',ele_charac(1:20),'|',TripCBFlag(1:6)) relay_setting_string
       save strcat(ntoa(ele_ctr),',',dum_na,',',ele_pkp_str1,',',ele_pkp_str2,',',dum_na,',',
-        ntoa(ele_dly),',',ele_charac,',',TripCBFlag) relay_setting_string_file
+        ntoa(ele_dly),',"',ele_charac,'",',TripCBFlag) relay_setting_string_file
 
       % Get its functional designation. If blank at system level, go to model level
       % Since CUPL variable support is not available yet, go directly to the DB table
@@ -1137,14 +1169,55 @@ define_macro (ppdcr_get_element_info,
       endif
 
       % For now
-      save '' ct_missing
-      save '' ct_br_mismatch
       save '' vt_missing
       save '' vt_br_mismatch
       save '' vt_sub_mismatch
 
       % Don't need a functional designation. TRIP_CB alone is enough
       save "CDIFF" elfunctype
+
+      % Collect ct information. CDIFF_FROM_BUS_1...7, CDIFF_TO_BUS_1...7, CDIFF_CIRCUIT_1...7
+      save 0 numcdfcts
+      define_matrix cdfcts(3)
+      save 1 cdfctindx
+      dowhile (cdfctindx <= 7,
+        save strcat('save CDIFF_FROM_BUS_',ntoa(cdfctindx),' cse cdfbus') str1
+        str1
+        save strcat('save CDIFF_TO_BUS_',ntoa(cdfctindx),' cse cdtbus') str1
+        str1
+        save strcat('save CDIFF_CIRCUIT_',ntoa(cdfctindx),' cse cdcckt') str1
+        str1
+        if (cdfbus > 0 and cdtbus > 0) then % Valid ct branch
+          increment(numcdfcts)
+          save cdfbus cdfcts(1,numcdfcts)
+          save cdtbus cdfcts(2,numcdfcts)
+          save cdcckt cdfcts(3,numcdfcts)
+          save strcat('CT From-to-ckt: ',ntoa(cdfbus),'-',ntoa(cdtbus),'-',ntoa(cdcckt)) LineRowString
+          write_to_screen LineRowString
+        endif
+        increment(cdfctindx)
+      )
+
+      save 'No' ct_missing
+      if (numcdfcts < 2) then % We must have atleast two CTs
+        save 'Yes' ct_missing
+      endif
+
+      % Validate CT branch
+      save relay_lzop_tag rltag rlztag
+      save relay_protect_local_bus  cse rlprot_fbus
+      save relay_protect_remote_bus cse rlprot_tbus
+      save relay_protect_circuit    cse rlprot_cckt
+      save 'No' ct_br_mismatch
+      if (ct_missing = 'Yes') then
+        save '' ct_br_mismatch  % Blank, not yes
+      else
+        save FALSE ctmatchfound
+        ppdcr_validate_cdiff_ctbranch()
+        if (not ctmatchfound) then
+           save 'Yes' ct_br_mismatch
+        endif
+      endif
 
       % Get settings for display
       save '' dum_set
@@ -1198,7 +1271,7 @@ define_macro (ppdcr_get_element_info,
 
       save final_rep_string ele_screen_report(numeles)
 
-      save strcat(rlcod,",",rldes,",",rlzun,",",
+      save strcat(rlcod,',"',rldes,'","',rlzun,'",',
         relay_setting_string_file,",",
         elfunctype,",",elclcode) element_rep_string_file
       save strcat(study_datetime_str,',','"',fsubid,'","',lzname,'",',lztype,',',relay_rep_string_file,',',
@@ -1249,6 +1322,76 @@ define_macro (ppdcr_validate_vt,
     endif
     increment(vtbrindx)
   )
+)
+
+
+define_macro (ppdcr_validate_cdiff_ctbranch,
+  % Use rlprot_fbus, rlprot_tbus, rlprot_cckt, rlztag, opctname and opcttype
+  % We know already that CT is not missing because opcctype is not blank or null.
+
+  % First, use LZOP tag, rlztag and get all protected branches for the LZOP. For LINE, we already
+  % have rlprot_fbus, _tbus and _cckt. For MISC, get list of protected branches.
+  % For XFMR LZOP: get LZOP_ID (EQUIPMENT_NAME) and SUBSTATION_TAG. Use these two to get transformer tag from
+  % N_CIRCUIT_TRANSFORMER_DATA. Use transformer tag into NCKT_TRANSFORMER_DETAILS to get from, to, ckt combos.
+
+  save lzop_type rlztag elem_lztype
+
+  if (elem_lztype = 'XFMR') then % Protected branches already determined
+  elseif (elem_lztype = 'MISC') then % Protected branches already determined
+  else % Just use rlprot_fbus, rlprot_tbus and rlprot_cckt
+    define_matrix rlprot_branches (3)
+    save 0 numrlprot_branches
+    increment (numrlprot_branches)
+    save rlprot_fbus rlprot_branches(1, numrlprot_branches)
+    save rlprot_tbus rlprot_branches(2, numrlprot_branches)
+    save rlprot_cckt rlprot_branches(3, numrlprot_branches)
+  endif
+
+  % Use f-t-c of each CDIFF CT to compare against f-t-c combinations from rlprot_branches
+  save 0 cdfctmatchesfound
+  save 1 cdfctindx
+  dowhile (cdfctindx <= numcdfcts,
+    save cdfcts(1,cdfctindx) ct_local_bus
+    save cdfcts(2,cdfctindx) ct_remote_bus
+    save cdfcts(3,cdfctindx) ct_circuit
+    save bus_substation_tag ct_local_bus ctlocal_subtag
+
+    save 1 ctbrindx
+    dowhile (ctbrindx <= numrlprot_branches,
+      save rlprot_branches(1, ctbrindx) rlprot_fbus
+      save rlprot_branches(2, ctbrindx) rlprot_tbus
+      save rlprot_branches(3, ctbrindx) rlprot_cckt
+      save bus_substation_tag rlprot_fbus rlprotfbus_subtag
+      save bus_substation_tag rlprot_tbus rlprottbus_subtag
+      if (ctlocal_subtag = rlprotfbus_subtag) then % rlprot_fbus and ct_local_bus are in the same substation
+        if (ct_local_bus = rlprot_fbus AND ct_remote_bus = rlprot_tbus AND ct_circuit = rlprot_cckt) then
+          increment(cdfctmatchesfound) % Match found for this CT
+          break
+        endif
+      endif
+      if (ctlocal_subtag = rlprottbus_subtag) then % rlprot_tbus and ct_local_bus are in the same substation
+        if (ct_local_bus = rlprot_tbus AND ct_remote_bus = rlprot_fbus AND ct_circuit = rlprot_cckt) then
+          increment(cdfctmatchesfound) % Match found for this CT
+          break
+        endif
+      endif
+      if (elem_lztype = 'XFMR') then % For XFMR LZOPs, check opposite orientation, when all terminals of xfmr are in same substation.
+        if (ct_local_bus = rlprot_tbus AND ct_remote_bus = rlprot_fbus AND ct_circuit = rlprot_cckt) then
+          increment(cdfctmatchesfound) % Match found for this CT
+          break
+        endif
+      endif
+      increment(ctbrindx)
+    )
+    increment(cdfctindx)
+  )
+  if (elem_lztype = 'XFMR' AND cdfctmatchesfound = numcdfcts) then
+    save TRUE ctmatchfound
+  elseif ( (elem_lztype = 'MISC' OR elem_lztype = 'LINE') AND cdfctmatchesfound > 0) then
+    % We have a match between at least one CT branch and one of the protected branches
+    save TRUE ctmatchfound
+  endif
+
 )
 
 
@@ -1392,6 +1535,7 @@ system_macro ppdcr_get_relays_from_lzop
              ppdcr_remove_illegal_chars
              ppdcr_validate_ctbranch
              ppdcr_validate_vt
+             ppdcr_validate_cdiff_ctbranch
              x
 
 echo on
